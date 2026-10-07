@@ -7162,7 +7162,10 @@ function deserializeVecExportEntry(pos) {
 // Arrays used by `deserializeStr` for passing to `String.fromCharCode`.
 // These arrays are reused over and over, avoiding allocating a new temporary array for each string.
 // Clone `key`
+// Clone `key`
 // Alphabetical order
+// Replace `left` of innermost `TSQualifiedName` with a nested `TSQualifiedName` with
+// `id` of this namespace on left, and previous `left` on right.
 // HTML comment discriminants equal their delimiter lengths (3 or 4).
 // Note: Tried reducing this check to a single branch by making the comparison the equivalent of this Rust:
 // `end.wrapping_sub(sourceStartPos) <= firstNonAsciiOffset`.

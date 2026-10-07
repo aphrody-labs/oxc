@@ -864,3 +864,18 @@ fn ast_cloning_keeps_attachments_only_with_semantic_ids() {
     cloned.comments[0].attachment = None;
     assert_eq!(attachment(&program, "// leading"), owner);
 }
+
+#[test]
+fn empty_import_specifier_comments_belong_to_the_declaration() {
+    let allocator = Allocator::default();
+    let source = "import { /* inside */ } from 'module';";
+    let mut program = parse(&allocator, source, SourceType::mjs());
+    assign(&mut program);
+    assert_eq!(
+        attachment(&program, "/* inside */"),
+        CommentAttachment {
+            node_id: Cell::new(node_id(&program, AstType::ImportDeclaration, source)),
+            placement: CommentPlacement::Dangling,
+        },
+    );
+}
