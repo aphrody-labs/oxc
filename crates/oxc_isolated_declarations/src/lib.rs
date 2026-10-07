@@ -102,7 +102,13 @@ impl<'a> IsolatedDeclarations<'a> {
             source_type,
             program.source_text,
             ArenaVec::from_iter_in(
-                program.comments.iter().filter(|c| c.is_jsdoc()).cloned(),
+                program.comments.iter().filter(|c| c.is_jsdoc()).map(|comment| {
+                    let mut comment = comment.clone();
+                    // The declaration AST has fresh nodes without IDs, so source AST owners
+                    // cannot identify nodes in this program. Keep the source-position fallback.
+                    comment.attachment = None;
+                    comment
+                }),
                 &self,
             ),
             None,
