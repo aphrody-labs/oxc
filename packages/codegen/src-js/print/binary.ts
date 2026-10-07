@@ -1,5 +1,12 @@
 // Binary/logical expressions (port of `binary_expr_visitor.rs`).
 
+import {
+  startNodeComments,
+  finishNodeComments,
+  hasAttachedComments,
+  printDeferredLeadingComments,
+  printTrailingCommentsInsideParens,
+} from "./comments.ts";
 import { typeAssertIs } from "../asserts.ts";
 import { CAT_CLOSE_BRACKET, CAT_OTHER } from "./categories.ts";
 import { write } from "./write.ts";
@@ -58,15 +65,20 @@ export function printBinaryish(
   };
 
   for (;;) {
+    if (COMMENTS && v.e !== node) startNodeComments(v.e, state);
     binCheckAndPrepare(v, state);
 
-    const left = withoutParens(v.e.left);
+    const left: ESTree.Expression | ESTree.PrivateIdentifier =
+      COMMENTS && v.e.left.type === "ParenthesizedExpression" && hasAttachedComments(state)
+        ? v.e.left
+        : withoutParens(v.e.left);
     if (left.type === "BinaryExpression" || left.type === "LogicalExpression") {
       if (left.type === "BinaryExpression" && left.left.type === "PrivateIdentifier") {
         // Private-in expression as the left operand
         typeAssertIs<ESTree.PrivateInExpression>(left);
         printPrivateInExpression(left, state, v.leftPrecedence);
         binVisitRightAndFinish(v, state);
+        if (COMMENTS && v.e !== node && v.e.comments != null) finishNodeComments(v.e, state);
         break;
       }
 
@@ -89,12 +101,14 @@ export function printBinaryish(
       // this precedence and `ctx` unchanged.
       printExpression(v.e.left, state, v.leftPrecedence, v.ctx);
       binVisitRightAndFinish(v, state);
+      if (COMMENTS && v.e !== node && v.e.comments != null) finishNodeComments(v.e, state);
       break;
     }
   }
 
   while ((v = v.parent) !== null) {
     binVisitRightAndFinish(v, state);
+    if (COMMENTS && v.e !== node && v.e.comments != null) finishNodeComments(v.e, state);
   }
 }
 
@@ -121,6 +135,7 @@ function binCheckAndPrepare(v: BinaryVisitor, state: State): void {
     write(state, "(", CAT_OTHER);
     v.ctx &= ~CTX_FORBID_IN;
   }
+  if (COMMENTS) printDeferredLeadingComments(e, state);
   // One level below the operator's own precedence. The precedence scale has no gaps, so this is
   // subtraction rather than a second table - `BinaryOperator::lower_precedence` in `oxc_syntax`
   // names the adjacent variant for each operator, which comes to the same thing.
@@ -182,5 +197,8 @@ function binVisitRightAndFinish(v: BinaryVisitor, state: State): void {
   write(state, PADDED_BIN_OPERATORS[v.operator], CAT_OTHER);
   // Any `ParenthesizedExpression` wrapper is kept, for the same reason as on the left operand
   printExpression(v.e.right, state, v.rightPrecedence, v.ctx);
-  if (v.wrap) write(state, ")", CAT_CLOSE_BRACKET);
+  if (v.wrap) {
+    if (COMMENTS) printTrailingCommentsInsideParens(v.e, state);
+    write(state, ")", CAT_CLOSE_BRACKET);
+  }
 }
