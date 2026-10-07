@@ -76,7 +76,6 @@ pub struct CodegenReturn<'a> {
 /// use oxc_codegen::{Codegen, CodegenOptions};
 /// use oxc_ast::ast::Program;
 /// use oxc_parser::Parser;
-/// use oxc_comment_assignment::CommentAssignment;
 /// use oxc_allocator::Allocator;
 /// use oxc_span::SourceType;
 ///
@@ -86,7 +85,6 @@ pub struct CodegenReturn<'a> {
 /// assert!(parsed.diagnostics.is_empty());
 ///
 /// let mut program = parsed.program;
-/// CommentAssignment::new().assign(&mut program);
 /// let js = Codegen::new().build(&program);
 /// assert_eq!(js.code, "const a = 1 + 2; // result\n");
 /// ```

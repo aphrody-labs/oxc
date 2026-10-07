@@ -901,14 +901,26 @@ fn test_coercion_substitution_while() {
 
 #[test]
 fn test_coercion_substitution_unknown_type() {
-    test("var x = /** @type {?} */ ({});\nif (x != null) throw 'a';\n", "throw 'a';\n");
-    test("var x = /** @type {?} */ (1);\nif (x != 0) throw 'a';\n", "throw 'a';\n");
+    test(
+        "var x = /** @type {?} */ ({});\nif (x != null) throw 'a';\n",
+        "throw 'a';\n/** @type {?} */\n",
+    );
+    test(
+        "var x = /** @type {?} */ (1);\nif (x != 0) throw 'a';\n",
+        "throw 'a';\n/** @type {?} */\n",
+    );
 }
 
 #[test]
 fn test_coercion_substitution_all_type() {
-    test_same("export var x = /** @type {*} */ ({});\nif (x != null) throw 'a';\n");
-    test_same("export var x = /** @type {*} */ (1);\nif (x != 0) throw 'a';\n");
+    test(
+        "export var x = /** @type {*} */ ({});\nif (x != null) throw 'a';\n",
+        "export var x = {};\nif (x != null) throw 'a';\n/** @type {*} */\n",
+    );
+    test(
+        "export var x = /** @type {*} */ (1);\nif (x != 0) throw 'a';\n",
+        "export var x = 1;\nif (x != 0) throw 'a';\n/** @type {*} */\n",
+    );
 }
 
 #[test]

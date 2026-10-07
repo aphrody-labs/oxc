@@ -2586,7 +2586,6 @@ function deserializeRegExp(pos) {
 function deserializeRegExpFlags(pos) {
   let flagBits = deserializeU8(pos),
     flags = "";
-  // Alphabetical order
   flagBits & 64 && (flags += "d");
   flagBits & 1 && (flags += "g");
   flagBits & 2 && (flags += "i");
@@ -4754,9 +4753,6 @@ function deserializeStr(pos) {
     // String is all ASCII, so slice from `sourceTextLatin`
     return sourceTextLatin.substr(pos - sourceStartPos, len);
   }
-  // String is not in source region - use `fromCharCode.apply` with a temp array of correct length.
-  // Copy bytes into temp array.
-  // If any byte is non-ASCII, use `utf8Slice`.
   let arr = stringDecodeArrays[len];
   for (let i = 0; i < len; i++) {
     let b = uint8[pos + i];
@@ -6068,3 +6064,28 @@ function deserializeVecExportEntry(pos) {
   }
   return arr;
 }
+// Arrays used by `deserializeStr` for passing to `String.fromCharCode`.
+// These arrays are reused over and over, avoiding allocating a new temporary array for each string.
+// Clone `key`
+// Alphabetical order
+// HTML comment discriminants equal their delimiter lengths (3 or 4).
+// Note: Tried reducing this check to a single branch by making the comparison the equivalent of this Rust:
+// `end.wrapping_sub(sourceStartPos) <= firstNonAsciiOffset`.
+//
+// The JS versions tried were:
+// - `((end - sourceStartPos) >>> 0) <= firstNonAsciiOffset`
+// - `((end - sourceStartPos) & 0x7FFF_FFFF) <= firstNonAsciiOffset`
+// But it turned out that these are both slower by 5-10% on files which are all ASCII.
+//
+// `>>>` is slower as V8 can't assume result fits in an SMI (which is a 32-bit *signed* integer),
+// as result could be greater or equal to `2 ** 31`. So it converts both the comparison's operands to `float64`s
+// and does float compare (which is slower than integer compare).
+//
+// `& 0x7FFF_FFFF` is slower as it has a longer chain of data dependencies than the 2 independent
+// branch comparisons.
+//
+// Both branches are very predictable, so 2 branches wins.
+// String is not in source region - use `fromCharCode.apply` with a temp array of correct length.
+// Copy bytes into temp array.
+// If any byte is non-ASCII, use `utf8Slice`.
+/* 2^32 */

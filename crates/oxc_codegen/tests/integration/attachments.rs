@@ -4,7 +4,6 @@ use oxc_ast::{
     ast::{ArrayExpressionElement, Expression, Program, Statement},
 };
 use oxc_codegen::{Codegen, CodegenOptions, CommentOptions, LegalComment};
-use oxc_comment_assignment::CommentAssignment;
 use oxc_parser::{ParseOptions, Parser};
 use oxc_span::{SourceType, Span};
 use oxc_syntax::node::NodeId;
@@ -41,7 +40,7 @@ fn check_with_parse_options(
     let allocator = Allocator::default();
     let parsed = Parser::new(&allocator, source, source_type).with_options(parse_options).parse();
     assert!(parsed.diagnostics.is_empty(), "{source}: {:?}", parsed.diagnostics);
-    let mut program = parsed.program;
+    let program = parsed.program;
     let without_comments = CodegenOptions {
         minify: true,
         comments: CommentOptions::disabled(),
@@ -49,7 +48,7 @@ fn check_with_parse_options(
     };
     let expected = Codegen::new().with_options(without_comments.clone()).build(&program).code;
     let expected_comments = comments(&program);
-    CommentAssignment::new().assign(&mut program);
+
     let options = CodegenOptions { minify, ..CodegenOptions::default() };
     let code = Codegen::new().with_options(options.clone()).build(&program).code;
     let reparsed = Parser::new(&allocator, &code, source_type).with_options(parse_options).parse();
@@ -58,14 +57,14 @@ fn check_with_parse_options(
         "{source}\nGenerated:\n{code}\n{:?}",
         reparsed.diagnostics
     );
-    let mut reparsed = reparsed.program;
+    let reparsed = reparsed.program;
     assert_eq!(comments(&reparsed), expected_comments, "{source}\nGenerated:\n{code}");
     assert_eq!(
         Codegen::new().with_options(without_comments).build(&reparsed).code,
         expected,
         "{source}\nGenerated:\n{code}"
     );
-    CommentAssignment::new().assign(&mut reparsed);
+
     assert_eq!(
         Codegen::new().with_options(options).build(&reparsed).code,
         code,
@@ -232,8 +231,8 @@ fn generated_annotations_after_operators() {
             assert_eq!(first.matches("/* @__PURE__ */").count(), 1, "{first}");
             let parsed = Parser::new(&allocator, &first, SourceType::mjs()).parse();
             assert!(parsed.diagnostics.is_empty(), "{first}: {:?}", parsed.diagnostics);
-            let mut reparsed = parsed.program;
-            CommentAssignment::new().assign(&mut reparsed);
+            let reparsed = parsed.program;
+
             assert_eq!(Codegen::new().with_options(options).build(&reparsed).code, first);
         }
     }
@@ -326,11 +325,15 @@ fn pure_annotation_group_keeps_source_order() {
     let source = "const x = /* before */ /*#__PURE__*/ /* after */ factory().value;";
     let allocator = Allocator::default();
     let mut program = Parser::new(&allocator, source, SourceType::mjs()).parse().program;
-    CommentAssignment::new().assign(&mut program);
+
     // A transform can move neighboring comments onto the annotated call.
-    let attachment = program.comments[1].attachment;
+    let attachment = program.comments[1].attachment.as_ref().unwrap();
+    let owner = attachment.node_id.get();
+    let placement = attachment.placement;
     for comment in &mut program.comments {
-        comment.attachment = attachment;
+        let attachment = comment.attachment.as_mut().unwrap();
+        attachment.node_id.set(owner);
+        attachment.placement = placement;
     }
     for minify in [false, true] {
         let code = Codegen::new()
@@ -394,7 +397,7 @@ fn moved_and_removed_owners() {
     let allocator = Allocator::default();
     let source = "/* first */ first(); // first tail\n/* second */ second(); // second tail\n/* third */ third();";
     let mut program = Parser::new(&allocator, source, SourceType::mjs()).parse().program;
-    CommentAssignment::new().assign(&mut program);
+
     program.body.swap(0, 2);
     let code = Codegen::new().build(&program).code;
     assert!(code.find("/* third */").unwrap() < code.find("third()").unwrap(), "{code}");
@@ -417,7 +420,7 @@ fn inside_comments_follow_ids_when_container_spans_change() {
     let allocator = Allocator::default();
     let source = "[[], /* outer */];";
     let mut program = Parser::new(&allocator, source, SourceType::mjs()).parse().program;
-    CommentAssignment::new().assign(&mut program);
+
     for minify in [false, true] {
         let options = CodegenOptions { minify, ..CodegenOptions::default() };
         let expected = Codegen::new().with_options(options.clone()).build(&program).code;
@@ -428,8 +431,8 @@ fn inside_comments_follow_ids_when_container_spans_change() {
             let Expression::ArrayExpression(outer) = &mut statement.expression else {
                 unreachable!();
             };
-            let attachment = program.comments[0].attachment.unwrap();
-            assert_eq!(attachment.node_id, outer.node_id());
+            let attachment = program.comments[0].attachment.as_ref().unwrap();
+            assert_eq!(attachment.node_id.get(), outer.node_id());
             assert_eq!(attachment.placement, CommentPlacement::Dangling);
             let span = if discard_spans { Span::default() } else { outer.span };
             let ArrayExpressionElement::ArrayExpression(inner) = &mut outer.elements[0] else {
@@ -447,8 +450,8 @@ fn generated_container_does_not_claim_program_comments() {
     let allocator = Allocator::default();
     let source = "[];\n/* eof */";
     let mut program = Parser::new(&allocator, source, SourceType::mjs()).parse().program;
-    CommentAssignment::new().assign(&mut program);
-    assert_eq!(program.comments[0].attachment.unwrap().node_id, NodeId::ROOT);
+
+    assert_eq!(program.comments[0].attachment.as_ref().unwrap().node_id.get(), NodeId::ROOT);
     let Statement::ExpressionStatement(statement) = &mut program.body[0] else {
         unreachable!();
     };
@@ -488,14 +491,14 @@ fn binary_chain_comments() {
 fn return_comment_without_preserved_parentheses() {
     let allocator = Allocator::default();
     let source = "function f() { return (// value\n x + y); }";
-    let mut program = Parser::new(&allocator, source, SourceType::mjs())
+    let program = Parser::new(&allocator, source, SourceType::mjs())
         .with_options(oxc_parser::ParseOptions {
             preserve_parens: false,
             ..oxc_parser::ParseOptions::default()
         })
         .parse()
         .program;
-    CommentAssignment::new().assign(&mut program);
+
     let code = Codegen::new().build(&program).code;
     let parsed = Parser::new(&allocator, &code, SourceType::mjs()).parse();
     assert!(parsed.diagnostics.is_empty(), "{code}: {:?}", parsed.diagnostics);
@@ -511,14 +514,14 @@ fn return_comment_without_preserved_parentheses() {
 fn string_statement_without_preserved_parentheses() {
     let allocator = Allocator::default();
     let source = "(/* string */ 'use strict');";
-    let mut program = Parser::new(&allocator, source, SourceType::mjs())
+    let program = Parser::new(&allocator, source, SourceType::mjs())
         .with_options(oxc_parser::ParseOptions {
             preserve_parens: false,
             ..oxc_parser::ParseOptions::default()
         })
         .parse()
         .program;
-    CommentAssignment::new().assign(&mut program);
+
     for minify in [false, true] {
         let code = Codegen::new()
             .with_options(CodegenOptions { minify, ..CodegenOptions::default() })
@@ -536,8 +539,8 @@ fn options() {
     let allocator = Allocator::default();
     let source =
         "/* normal */ f(); // tail\n/** jsdoc */ g(); h(); /*! license */\n/* @__PURE__ */ i();";
-    let mut program = Parser::new(&allocator, source, SourceType::mjs()).parse().program;
-    CommentAssignment::new().assign(&mut program);
+    let program = Parser::new(&allocator, source, SourceType::mjs()).parse().program;
+
     for legal in
         [LegalComment::None, LegalComment::Inline, LegalComment::Eof, LegalComment::External]
     {
@@ -571,8 +574,8 @@ fn options() {
 fn legal_jsdoc_is_printed_once() {
     let allocator = Allocator::default();
     let source = "f(); /** @license legal */";
-    let mut program = Parser::new(&allocator, source, SourceType::mjs()).parse().program;
-    CommentAssignment::new().assign(&mut program);
+    let program = Parser::new(&allocator, source, SourceType::mjs()).parse().program;
+
     for legal in [
         LegalComment::None,
         LegalComment::Inline,
@@ -604,8 +607,8 @@ fn legal_jsdoc_is_printed_once() {
 fn source_mappings_follow_comments() {
     let allocator = Allocator::default();
     let source = "/* 💬 */\nconst array = [value, /* close */]; // tail\nnext();";
-    let mut program = Parser::new(&allocator, source, SourceType::mjs()).parse().program;
-    CommentAssignment::new().assign(&mut program);
+    let program = Parser::new(&allocator, source, SourceType::mjs()).parse().program;
+
     let result = Codegen::new()
         .with_options(CodegenOptions {
             source_map_path: Some("input.js".into()),
@@ -633,5 +636,19 @@ fn source_mappings_follow_comments() {
             "Missing mapping for {token}: {}",
             result.code
         );
+    }
+}
+
+#[test]
+fn unapplied_annotations_do_not_become_applied_when_printed() {
+    for source in [
+        "const foo /* #__PURE__ */ = pureOperation();",
+        "const foo /* @__NO_SIDE_EFFECTS__ */ = () => effect();",
+    ] {
+        let allocator = Allocator::default();
+        let program = Parser::new(&allocator, source, SourceType::mjs()).parse().program;
+        let printed = Codegen::new().build(&program).code;
+        assert!(!printed.contains("__PURE__"), "{printed}");
+        assert!(!printed.contains("__NO_SIDE_EFFECTS__"), "{printed}");
     }
 }

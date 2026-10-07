@@ -27,12 +27,20 @@ pub trait Gen: GetSpan + GetNodeId {
         false
     }
 
+    #[inline]
+    fn unapplied_annotation(&self) -> Option<AnnotationKind> {
+        None
+    }
+
     /// Print the node and its attached comments.
     #[inline]
     fn print(&self, p: &mut Codegen, ctx: Context) {
         if p.attached_comments.is_empty() {
             self.r#gen(p, ctx);
         } else {
+            if let Some(kind) = self.unapplied_annotation() {
+                p.discard_unapplied_attached_annotation(self.node_id(), kind);
+            }
             let comments = p.start_node_comments_with_deferred_leading(self.node_id(), |p| {
                 self.defer_leading_comments(ctx, p)
             });
@@ -53,12 +61,20 @@ pub trait GenExpr: GetSpan + GetNodeId {
         false
     }
 
+    #[inline]
+    fn unapplied_annotation(&self) -> Option<AnnotationKind> {
+        None
+    }
+
     /// Print the expression and its attached comments, respecting operator precedence.
     #[inline]
     fn print_expr(&self, p: &mut Codegen, precedence: Precedence, ctx: Context) {
         if p.attached_comments.is_empty() {
             self.gen_expr(p, precedence, ctx);
         } else {
+            if let Some(kind) = self.unapplied_annotation() {
+                p.discard_unapplied_attached_annotation(self.node_id(), kind);
+            }
             let comments = p.start_node_comments_with_deferred_leading(self.node_id(), |p| {
                 self.defer_leading_comments(precedence, ctx, p)
             });
@@ -139,6 +155,14 @@ impl Gen for Directive<'_> {
 }
 
 impl Gen for Statement<'_> {
+    #[inline]
+    fn unapplied_annotation(&self) -> Option<AnnotationKind> {
+        match self {
+            Self::FunctionDeclaration(node) if !node.pure => Some(AnnotationKind::NoSideEffects),
+            _ => None,
+        }
+    }
+
     fn r#gen(&self, p: &mut Codegen, ctx: Context) {
         match self {
             // Most common statements first (based on parser order and frequency)
@@ -819,6 +843,11 @@ impl Gen for VariableDeclarator<'_> {
 
 impl Gen for Function<'_> {
     #[inline]
+    fn unapplied_annotation(&self) -> Option<AnnotationKind> {
+        (!self.pure).then_some(AnnotationKind::NoSideEffects)
+    }
+
+    #[inline]
     fn defer_leading_comments(&self, ctx: Context, p: &Codegen) -> bool {
         let n = p.code_len();
         self.is_expression()
@@ -1421,6 +1450,19 @@ impl Gen for ExportDefaultDeclarationKind<'_> {
 }
 
 impl GenExpr for Expression<'_> {
+    #[inline]
+    fn unapplied_annotation(&self) -> Option<AnnotationKind> {
+        match self {
+            Self::CallExpression(node) if !node.pure => Some(AnnotationKind::Pure),
+            Self::NewExpression(node) if !node.pure => Some(AnnotationKind::Pure),
+            Self::FunctionExpression(node) if !node.pure => Some(AnnotationKind::NoSideEffects),
+            Self::ArrowFunctionExpression(node) if !node.pure => {
+                Some(AnnotationKind::NoSideEffects)
+            }
+            _ => None,
+        }
+    }
+
     // Called only after the sparse owner guards. Keep wrapping decisions out
     // of the generic printer's comment-free instruction path.
     #[inline(never)]
@@ -1758,6 +1800,11 @@ impl GenExpr for PrivateFieldExpression<'_> {
 
 impl GenExpr for CallExpression<'_> {
     #[inline]
+    fn unapplied_annotation(&self) -> Option<AnnotationKind> {
+        (!self.pure).then_some(AnnotationKind::Pure)
+    }
+
+    #[inline]
     fn defer_leading_comments(&self, _precedence: Precedence, _ctx: Context, _p: &Codegen) -> bool {
         true
     }
@@ -2044,6 +2091,11 @@ impl Gen for PropertyKey<'_> {
 }
 
 impl GenExpr for ArrowFunctionExpression<'_> {
+    #[inline]
+    fn unapplied_annotation(&self) -> Option<AnnotationKind> {
+        (!self.pure).then_some(AnnotationKind::NoSideEffects)
+    }
+
     #[inline]
     fn defer_leading_comments(&self, precedence: Precedence, ctx: Context, _p: &Codegen) -> bool {
         !self.pure
@@ -2691,6 +2743,11 @@ impl GenExpr for ChainExpression<'_> {
 }
 
 impl GenExpr for NewExpression<'_> {
+    #[inline]
+    fn unapplied_annotation(&self) -> Option<AnnotationKind> {
+        (!self.pure).then_some(AnnotationKind::Pure)
+    }
+
     #[inline]
     fn defer_leading_comments(&self, _precedence: Precedence, _ctx: Context, _p: &Codegen) -> bool {
         true

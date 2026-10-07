@@ -81,7 +81,7 @@ impl Codegen<'_> {
         self.comments.reserve(comments.len() - assigned);
         self.attached_comments.reserve(assigned);
         for comment in comments {
-            if let Some(attachment) = comment.attachment {
+            if let Some(attachment) = &comment.attachment {
                 // Token-relative helpers only classify leading JSDoc and legal
                 // comments. Ownership also preserves those in trailing positions.
                 let retain = match comment.content {
@@ -93,7 +93,7 @@ impl Codegen<'_> {
                     _ => self.options.print_annotation_comment(),
                 };
                 if retain {
-                    self.attached_comments.push(*comment, attachment);
+                    self.attached_comments.push(comment.clone(), attachment);
                 }
                 continue;
             }

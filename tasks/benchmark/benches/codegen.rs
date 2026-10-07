@@ -5,8 +5,6 @@ use oxc_benchmark::{BenchmarkId, Criterion, criterion_group, criterion_main};
 #[cfg(feature = "comment_assignment")]
 use oxc_codegen::CommentOptions;
 use oxc_codegen::{Codegen, CodegenOptions};
-#[cfg(feature = "comment_assignment")]
-use oxc_comment_assignment::CommentAssignment;
 use oxc_parser::Parser;
 use oxc_semantic::SemanticBuilder;
 use oxc_tasks_common::TestFiles;
@@ -88,8 +86,7 @@ fn bench_attached_comments(criterion: &mut Criterion) {
         let allocator = Allocator::default();
         let parsed = Parser::new(&allocator, &source, source_type).parse();
         assert!(parsed.diagnostics.is_empty(), "{name}: {:?}", parsed.diagnostics);
-        let mut program = parsed.program;
-        CommentAssignment::new().assign(&mut program);
+        let program = parsed.program;
         let mut group = criterion.benchmark_group(format!("codegen_attached/{name}"));
         for (name, comments) in [
             ("without_comments", CommentOptions::disabled()),

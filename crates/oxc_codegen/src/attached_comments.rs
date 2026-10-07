@@ -1,12 +1,13 @@
 use std::ops::Range;
 
-use oxc_ast::{Comment, CommentAttachment, CommentPlacement, ast::Expression};
+use oxc_ast::{Comment, CommentAttachment, CommentContent, CommentPlacement, ast::Expression};
 use oxc_syntax::node::NodeId;
 
 use crate::{Codegen, comment::AnnotationKind};
 
 struct AttachedComment {
-    attachment: CommentAttachment,
+    node_id: NodeId,
+    placement: CommentPlacement,
     comment: Comment,
     printed: bool,
     // Only the first record for each owner uses this flag. Enum and struct
@@ -48,16 +49,22 @@ impl AttachedComments {
         self.records.reserve(len);
     }
 
-    pub fn push(&mut self, comment: Comment, attachment: CommentAttachment) {
+    pub fn push(&mut self, comment: Comment, attachment: &CommentAttachment) {
         // Applied annotations attach to expressions/functions, so they cannot
         // change a statement boundary when its final semicolon is omitted.
         self.has_statement_comments |= !comment.is_pure() && !comment.is_no_side_effects();
-        self.records.push(AttachedComment { attachment, comment, printed: false, claimed: false });
+        self.records.push(AttachedComment {
+            node_id: attachment.node_id.get(),
+            placement: attachment.placement,
+            comment,
+            printed: false,
+            claimed: false,
+        });
     }
 
     pub fn sort(&mut self) {
         self.records.sort_unstable_by_key(|entry| {
-            (entry.attachment.node_id, entry.attachment.placement, entry.comment.span.start)
+            (entry.node_id, entry.placement, entry.comment.span.start)
         });
     }
 
@@ -72,24 +79,19 @@ impl AttachedComments {
     }
 
     fn find(&self, node_id: NodeId) -> Range<usize> {
-        let start = self.records.partition_point(|entry| entry.attachment.node_id < node_id);
-        let end = start
-            + self.records[start..].partition_point(|entry| entry.attachment.node_id == node_id);
+        let start = self.records.partition_point(|entry| entry.node_id < node_id);
+        let end = start + self.records[start..].partition_point(|entry| entry.node_id == node_id);
         start..end
     }
 
     fn claim(&mut self, node_id: NodeId) -> Option<Range<usize>> {
         let range = if node_id >= self.high_water {
             self.high_water = node_id;
-            while self.cursor < self.records.len()
-                && self.records[self.cursor].attachment.node_id < node_id
-            {
+            while self.cursor < self.records.len() && self.records[self.cursor].node_id < node_id {
                 self.cursor += 1;
             }
             let start = self.cursor;
-            while self.cursor < self.records.len()
-                && self.records[self.cursor].attachment.node_id == node_id
-            {
+            while self.cursor < self.records.len() && self.records[self.cursor].node_id == node_id {
                 self.cursor += 1;
             }
             start..self.cursor
@@ -113,6 +115,27 @@ impl AttachedComments {
 }
 
 impl Codegen<'_> {
+    /// An annotation that the parser did not apply must not become applicable
+    /// merely because ownership prints it immediately before a call or function.
+    pub(crate) fn discard_unapplied_attached_annotation(
+        &mut self,
+        node_id: NodeId,
+        kind: AnnotationKind,
+    ) {
+        let range = self.attached_comments.find(node_id);
+        for entry in &mut self.attached_comments.records[range] {
+            let unapplied = match kind {
+                AnnotationKind::Pure => entry.comment.content == CommentContent::PureNotApplied,
+                AnnotationKind::NoSideEffects => {
+                    entry.comment.content == CommentContent::NoSideEffectsNotApplied
+                }
+            };
+            if unapplied || kind.matches(&entry.comment) {
+                entry.printed = true;
+            }
+        }
+    }
+
     /// Establish ownership once, even when enum and struct printers share an ID.
     #[inline]
     pub(crate) fn start_node_comments(&mut self, node_id: NodeId) -> Option<NodeId> {
@@ -136,7 +159,7 @@ impl Codegen<'_> {
         // comment-free nodes do not need to write lookup state.
         if node_id >= self.attached_comments.high_water {
             let next = self.attached_comments.records.get(self.attached_comments.cursor)?;
-            if next.attachment.node_id > node_id {
+            if next.node_id > node_id {
                 return None;
             }
         }
@@ -149,7 +172,7 @@ impl Codegen<'_> {
         let range = self.attached_comments.claim(node_id)?;
         let dangling = range.start
             + self.attached_comments.records[range.clone()]
-                .partition_point(|entry| entry.attachment.placement < CommentPlacement::Dangling);
+                .partition_point(|entry| entry.placement < CommentPlacement::Dangling);
         let previous_dangling =
             std::mem::replace(&mut self.attached_comments.current_dangling, dangling);
         let previous = std::mem::replace(&mut self.attached_comments.current, range);
@@ -221,10 +244,9 @@ impl Codegen<'_> {
     fn finish_node_comments_slow(&mut self, owner: NodeId) {
         let frame = self.attached_comments.frames.pop().unwrap();
         debug_assert_eq!(frame.owner, owner);
-        let has_trailing =
-            self.attached_comments.records[self.attached_comments.current.clone()].iter().any(
-                |entry| !entry.printed && entry.attachment.placement == CommentPlacement::Trailing,
-            );
+        let has_trailing = self.attached_comments.records[self.attached_comments.current.clone()]
+            .iter()
+            .any(|entry| !entry.printed && entry.placement == CommentPlacement::Trailing);
         if has_trailing {
             self.print_semicolon_if_needed();
             let newline = self.last_byte() == Some(b'\n');
@@ -256,23 +278,23 @@ impl Codegen<'_> {
                     continue;
                 }
                 entry.printed = true;
-                let comment = entry.comment;
-                self.print_attached_comment(comment);
+                let comment = entry.comment.clone();
+                self.print_attached_comment(&comment);
             }
             return;
         }
         for index in self.attached_comments.current.clone() {
             let entry = &mut self.attached_comments.records[index];
-            if entry.printed || entry.attachment.placement != placement {
+            if entry.printed || entry.placement != placement {
                 continue;
             }
             entry.printed = true;
-            let comment = entry.comment;
-            self.print_attached_comment(comment);
+            let comment = entry.comment.clone();
+            self.print_attached_comment(&comment);
         }
     }
 
-    fn print_attached_comment(&mut self, comment: Comment) {
+    fn print_attached_comment(&mut self, comment: &Comment) {
         // Source hints decide line breaks, while generated whitespace decides
         // indentation and spacing. Never carry a pending space across a newline.
         self.print_next_indent_as_space = false;
@@ -304,7 +326,7 @@ impl Codegen<'_> {
                 self.print_soft_space();
             }
         }
-        self.print_comment(&comment);
+        self.print_comment(comment);
         if comment.is_line() || comment.followed_by_newline() {
             self.print_hard_newline();
         } else {
@@ -326,7 +348,7 @@ impl Codegen<'_> {
                 .iter()
                 .any(|entry| {
                     !entry.printed
-                        && entry.attachment.placement == CommentPlacement::Leading
+                        && entry.placement == CommentPlacement::Leading
                         && (entry.comment.is_line()
                             || entry.comment.is_multiline_block()
                             || entry.comment.preceded_by_newline()
@@ -425,8 +447,8 @@ impl Codegen<'_> {
             found = true;
             if !entry.printed {
                 entry.printed = true;
-                let comment = entry.comment;
-                self.print_attached_comment(comment);
+                let comment = entry.comment.clone();
+                self.print_attached_comment(&comment);
             }
         }
         found
@@ -444,14 +466,20 @@ impl Codegen<'_> {
                     return None;
                 }
                 entry.printed = true;
-                Some(entry.comment)
+                // Removed call/function annotations cannot apply to another owner.
+                if !entry.comment.is_legal()
+                    && (entry.comment.is_pure() || entry.comment.is_no_side_effects())
+                {
+                    return None;
+                }
+                Some(entry.comment.clone())
             })
             .collect();
         comments.sort_unstable_by_key(|comment| comment.span.start);
         for mut comment in comments {
             comment.set_preceded_by_newline(true);
             comment.set_followed_by_newline(true);
-            self.print_attached_comment(comment);
+            self.print_attached_comment(&comment);
         }
     }
 }
@@ -460,7 +488,6 @@ impl Codegen<'_> {
 mod tests {
     use oxc_allocator::Allocator;
     use oxc_ast::CommentPlacement;
-    use oxc_comment_assignment::CommentAssignment;
     use oxc_parser::Parser;
     use oxc_span::SourceType;
 
@@ -499,8 +526,8 @@ mod tests {
             "class C { [/* key */ value /* end */]() {} static { /* static */ } }",
         ] {
             let allocator = Allocator::default();
-            let mut program = Parser::new(&allocator, source, SourceType::tsx()).parse().program;
-            CommentAssignment::new().assign(&mut program);
+            let program = Parser::new(&allocator, source, SourceType::tsx()).parse().program;
+
             let mut codegen = Codegen::new().with_source_text(source);
             codegen.build_comments(&program.comments);
             program.print(&mut codegen, Context::default());
@@ -525,12 +552,15 @@ mod tests {
     fn ordered_cursor_and_backward_lookup() {
         let allocator = Allocator::default();
         let source = "/* a */ a(); /* b */ b(); /* c */ c();";
-        let mut program = Parser::new(&allocator, source, SourceType::mjs()).parse().program;
-        CommentAssignment::new().assign(&mut program);
+        let program = Parser::new(&allocator, source, SourceType::mjs()).parse().program;
+
         let mut codegen = Codegen::new().with_source_text(source);
         codegen.build_comments(&program.comments);
-        let ids: Vec<_> =
-            program.comments.iter().map(|comment| comment.attachment.unwrap().node_id).collect();
+        let ids: Vec<_> = program
+            .comments
+            .iter()
+            .map(|comment| comment.attachment.as_ref().unwrap().node_id.get())
+            .collect();
         assert!(ids.windows(2).all(|pair| pair[0] < pair[1]));
         let table = &mut codegen.attached_comments;
         assert!(table.claim(ids[2]).is_some());
@@ -539,11 +569,6 @@ mod tests {
         assert!(table.claim(ids[1]).is_some());
         assert_eq!(table.cursor, end);
         assert!(table.claim(ids[0]).is_none());
-        assert!(
-            table
-                .records
-                .iter()
-                .all(|entry| entry.attachment.placement == CommentPlacement::Leading)
-        );
+        assert!(table.records.iter().all(|entry| entry.placement == CommentPlacement::Leading));
     }
 }

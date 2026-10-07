@@ -34,9 +34,9 @@ pub struct CodegenOptions {
 
     /// Print comments?
     ///
-    /// Run `oxc_comment_assignment::CommentAssignment` on the program before codegen
-    /// to preserve leading, trailing, and dangling comments by node ID. Programs
-    /// without comment attachments use the existing source-offset lookup.
+    /// The parser establishes leading, trailing, and dangling comment ownership.
+    /// Semantic analysis preserves it when rewriting node IDs. Unassigned comments
+    /// from manually built ASTs or clones use the source-offset lookup.
     ///
     /// Default is [CommentOptions::default].
     pub comments: CommentOptions,
