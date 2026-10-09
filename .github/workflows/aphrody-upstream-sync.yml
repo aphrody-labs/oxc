@@ -1,0 +1,63 @@
+name: Aphrody upstream sync
+
+# Keeps main in step with oxc-project/oxc main and mirrors upstream release tags (crates_v*, oxlint_v*, oxfmt_v*).
+# GitHub's merge-upstream merges main when it has no conflict; otherwise git merges and a conflict fails the run and leaves
+# main untouched. The `aphrody` branch (fork patches on a release tag) is moved by hand, see APHRODY.md.
+
+on:
+  schedule:
+    - cron: "23 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aphrody-upstream-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.repository == 'aphrody-labs/oxc'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      # GITHUB_TOKEN cannot push commits that touch .github/workflows, and upstream merges often do: a token with the
+      # `workflow` scope is the APHRODY_SYNC_TOKEN secret.
+      GH_TOKEN: ${{ secrets.APHRODY_SYNC_TOKEN || github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Merge upstream
+        run: |
+          set -euo pipefail
+          cmp=$(gh api "repos/$GH_REPO/compare/main...oxc-project:oxc:main" --jq '"\(.status) ahead=\(.ahead_by) behind=\(.behind_by)"')
+          echo "main vs upstream: $cmp"
+          case "$cmp" in
+            identical*|behind*) echo "nothing to merge"; exit 0 ;;
+          esac
+          if gh api -X POST "repos/$GH_REPO/merge-upstream" -f branch=main; then
+            echo; exit 0
+          fi
+          echo "merge-upstream refused, merging with git"
+          git config --global user.name "aphrody-dev"
+          git config --global user.email "contact@aphrody.com"
+          git clone --filter=blob:none --no-checkout "https://x-access-token:${GH_TOKEN}@github.com/${GH_REPO}.git" w
+          cd w
+          git remote add upstream https://github.com/oxc-project/oxc.git
+          git fetch --filter=blob:none upstream main
+          git checkout main
+          git merge --no-edit upstream/main
+          git push origin main
+
+      - name: Mirror release tags
+        run: |
+          set -euo pipefail
+          git ls-remote --tags --refs https://github.com/oxc-project/oxc.git 'crates_v*' 'oxlint_v*' 'oxfmt_v*' | sort -k2 > upstream.txt
+          git ls-remote --tags --refs "https://github.com/${GH_REPO}.git" 'crates_v*' 'oxlint_v*' 'oxfmt_v*' | sort -k2 > fork.txt
+          join -1 2 -2 2 -v 1 upstream.txt fork.txt | while read -r ref sha; do
+            if gh api -X POST "repos/$GH_REPO/git/refs" -f ref="$ref" -f sha="$sha" > /dev/null; then
+              echo "created $ref"
+            else
+              echo "skipped $ref ($sha not in the fork yet)"
+            fi
+          done
