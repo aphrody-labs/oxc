@@ -1,7 +1,7 @@
 #[cfg(feature = "napi")]
 mod api;
 pub mod cli;
-mod core;
+pub mod core;
 #[cfg(feature = "napi")]
 mod prettier_compat;
 

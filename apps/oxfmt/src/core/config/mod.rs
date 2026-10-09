@@ -201,7 +201,6 @@ pub enum ResolveOutcome {
     /// The file's parser requires a plugin that the resolved config did NOT enable.
     /// The payload carries the missing config key (e.g. `"svelte"`)
     /// so callers can construct a friendly error or log message.
-    #[cfg_attr(not(feature = "napi"), expect(dead_code))]
     MissingPlugin(&'static str),
 }
 
@@ -229,7 +228,6 @@ fn into_outcome(
 /// Relative Tailwind paths are resolved against provided `cwd`.
 ///
 /// Returns `Err` only when the merged config fails validation.
-#[cfg(feature = "napi")]
 pub fn resolve_for_api(
     raw_config: Value,
     kind: FileKind,
