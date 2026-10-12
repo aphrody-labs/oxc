@@ -276,9 +276,15 @@ export function printMemberExpression(
 ): void {
   const { object } = node;
   if (node.computed) {
-    // `(let)[0]` - a bare `let` object must be wrapped
-    const inner = withoutParens(object);
-    const wrap = inner.type === "Identifier" && inner.name === "let";
+    // `(let)[0]` - a bare `let` object must be wrapped.
+    // `object` can be any expression, so its `type` is a megamorphic load - read it once while unwrapping parens.
+    let inner = object,
+      innerType = inner.type;
+    while (innerType === "ParenthesizedExpression") {
+      inner = (inner as ESTree.ParenthesizedExpression).expression;
+      innerType = inner.type;
+    }
+    const wrap = innerType === "Identifier" && (inner as ESTree.IdentifierReference).name === "let";
 
     if (wrap) write(state, "(", CAT_OTHER);
     printExpression(object, state, PREC_POSTFIX, ctx & CTX_FORBID_CALL);
@@ -468,10 +474,8 @@ function printObjectProperty(node: ESTree.ObjectPropertyKind, state: State): voi
   }
 
   const { key, value } = node;
-  if (
-    value.type === "FunctionExpression"
-    || (TS && value.type === "TSEmptyBodyFunctionExpression")
-  ) {
+  const valueType = value.type;
+  if (valueType === "FunctionExpression" || (TS && valueType === "TSEmptyBodyFunctionExpression")) {
     markMapStart(state, node.start, node.end, node);
 
     const { kind } = node;
@@ -517,27 +521,38 @@ function printObjectProperty(node: ESTree.ObjectPropertyKind, state: State): voi
   // the expression printer what it is.
   // A `__proto__` shorthand leaves this null, since its flag says nothing about the value it carries.
   let shorthandIdentifier: ESTree.IdentifierReference | null = null;
-  if (!node.computed && key.type === "Identifier") {
-    if (key.name === "__proto__") {
-      shorthand = node.shorthand;
-    } else {
-      const inner = withoutParens(value);
-      if (inner.type === "Identifier" && key.name === inner.name) {
-        shorthand = true;
-        shorthandIdentifier = inner;
-      }
-    }
-  }
-
   let { computed } = node;
-  // `{ -1: 0 }` and `{ 1/0: 0 }` must print as `{ [-1]: 0 }` / `{ [1 / 0]: 0 }`
-  if (
-    !computed
-    && key.type === "Literal"
-    && typeof key.value === "number"
-    && (key.value < 0 || Object.is(key.value, -0) || !Number.isFinite(key.value))
-  ) {
-    computed = true;
+  if (!computed) {
+    const keyType = key.type;
+    if (keyType === "Identifier") {
+      const keyName = key.name;
+      if (keyName === "__proto__") {
+        shorthand = node.shorthand === true;
+      } else {
+        // Unwrap any parens, starting from the `type` already read
+        let inner = value,
+          innerType = valueType;
+        while (innerType === "ParenthesizedExpression") {
+          inner = (inner as ESTree.ParenthesizedExpression).expression;
+          innerType = inner.type;
+        }
+
+        if (innerType === "Identifier") {
+          typeAssertIs<ESTree.IdentifierReference>(inner);
+          if (inner.name === keyName) {
+            shorthand = true;
+            shorthandIdentifier = inner;
+          }
+        }
+      }
+    } else if (
+      keyType === "Literal"
+      && typeof key.value === "number"
+      && (key.value < 0 || Object.is(key.value, -0) || !Number.isFinite(key.value))
+    ) {
+      // `{ -1: 0 }` and `{ 1/0: 0 }` must print as `{ [-1]: 0 }` / `{ [1 / 0]: 0 }`
+      computed = true;
+    }
   }
 
   if (shorthand) {
@@ -755,7 +770,13 @@ function printConditionalExpression(
   // round trip: `value as Type ? /x/ : y` re-lexes the `/` as a division.
   let testPrecedence = PREC_CONDITIONAL;
   if (TS) {
-    const testType = withoutParens(node.test).type;
+    let { test } = node;
+    let testType = test.type;
+    while (testType === "ParenthesizedExpression") {
+      test = (test as ESTree.ParenthesizedExpression).expression;
+      testType = test.type;
+    }
+
     if (testType === "TSAsExpression" || testType === "TSSatisfiesExpression") {
       testPrecedence = PREC_COMPARE;
     }

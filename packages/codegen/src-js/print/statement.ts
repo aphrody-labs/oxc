@@ -1,6 +1,6 @@
 // Statements.
 
-import { typeAssertIs } from "../asserts.ts";
+import { debugAssert, typeAssertIs } from "../asserts.ts";
 import { printAssignmentTarget } from "./assignment_target.ts";
 import { printBindingPattern } from "./binding_pattern.ts";
 import {
@@ -32,7 +32,6 @@ import {
   printImportDeclaration,
 } from "./module.ts";
 import { CTX_FORBID_IN, CTX_NONE } from "./operators.ts";
-import { withoutParens } from "./parens.ts";
 import { PREC_COMMA, PREC_LOWEST } from "./precedence.ts";
 import { printString } from "./string.ts";
 import {
@@ -45,7 +44,7 @@ import {
 } from "./typescript.ts";
 
 import type { State } from "../state.ts";
-import type { UnknownNode } from "./types.ts";
+import type { Literal, UnknownNode } from "./types.ts";
 import type * as ESTree from "../../../../npm/oxc-types/types.d.ts";
 
 /**
@@ -86,17 +85,29 @@ export function printDirectivesAndStatements(
       stmt = body[i];
     } else {
       // Ensure a string literal (only possible via parentheses, since a bare one would be a directive)
-      // as 1st statement or after other real directives, is not re-parsed as a directive
-      const inner = withoutParens(stmt.expression);
-      if (inner.type === "Literal" && typeof inner.value === "string") {
-        const mapsIndent = state.indentLevel > 0 || state.pendingIndentAsSpace;
-        printIndent(state);
-        if (mapsIndent) markMapStart(state, stmt.start, stmt.end, stmt);
-        writeNoLast(state, "(");
-        printString(state, inner.value, inner.start, inner.end, inner);
-        write(state, ");\n", CAT_OTHER);
-        i++;
+      // as 1st statement or after other real directives, is not re-parsed as a directive.
+      // The expression can be anything, so its `type` is a megamorphic load - read it once while unwrapping parens.
+      let inner = stmt.expression,
+        innerType = inner.type;
+      while (innerType === "ParenthesizedExpression") {
+        inner = (inner as ESTree.ParenthesizedExpression).expression;
+        innerType = inner.type;
       }
+
+      if (innerType === "Literal") {
+        typeAssertIs<Literal>(inner);
+        const innerValue = inner.value;
+        if (typeof innerValue === "string") {
+          const mapsIndent = state.indentLevel > 0 || state.pendingIndentAsSpace;
+          printIndent(state);
+          if (mapsIndent) markMapStart(state, stmt.start, stmt.end, stmt);
+          writeNoLast(state, "(");
+          printString(state, innerValue, inner.start, inner.end, inner);
+          write(state, ");\n", CAT_OTHER);
+          i++;
+        }
+      }
+
       break;
     }
   }
@@ -447,11 +458,12 @@ function printIf(node: ESTree.IfStatement, state: State): void {
 
     writeIdent(state, "else");
 
-    if (alternate.type === "BlockStatement") {
+    const alternateType = alternate.type;
+    if (alternateType === "BlockStatement") {
       write(state, " ", CAT_OTHER);
       printBlockStatement(alternate, state);
       write(state, "\n", CAT_OTHER);
-    } else if (alternate.type === "IfStatement") {
+    } else if (alternateType === "IfStatement") {
       write(state, " ", CAT_OTHER);
       printIf(alternate, state);
     } else {
@@ -634,11 +646,12 @@ function printDoWhileStatement(node: ESTree.DoWhileStatement, state: State): voi
   writeWithMap(state, "do", CAT_IDENT, node.start, node.end, node);
 
   const { body } = node;
-  if (body.type === "BlockStatement") {
+  const bodyType = body.type;
+  if (bodyType === "BlockStatement") {
     write(state, " ", CAT_OTHER);
     printBlockStatement(body, state);
     write(state, " ", CAT_OTHER);
-  } else if (body.type === "EmptyStatement") {
+  } else if (bodyType === "EmptyStatement") {
     writeWithMap(state, ";\n", CAT_OTHER, body.start, body.end, body);
     printIndent(state);
   } else {
@@ -731,21 +744,16 @@ function printForOfStatement(node: ESTree.ForOfStatement, state: State): void {
   printIndent(state);
   printSpaceBeforeIdentifier(state);
 
-  writeWithMap(state, "for", CAT_IDENT, node.start, node.end, node);
-
-  if (node.await) writeIdent(state, " await");
-
-  write(state, " (", CAT_OTHER);
+  const isNotAwait = node.await !== true;
+  writeWithMap(state, isNotAwait ? "for (" : "for await (", CAT_OTHER, node.start, node.end, node);
 
   const { left } = node;
-  if (left.type === "VariableDeclaration") {
+  const leftType = left.type;
+  if (leftType === "VariableDeclaration") {
     printVariableDeclaration(left, state, CTX_NONE);
   } else {
-    typeAssertIs<ESTree.Expression>(left);
-    const bare = withoutParens(left);
-    const wrap =
-      forOfHeadStartsWithLet(left)
-      || (!node.await && bare.type === "Identifier" && bare.name === "async");
+    const wrap = forOfHeadNeedsWrapping(left, leftType, isNotAwait);
+
     if (wrap) write(state, "(", CAT_OTHER);
     printAssignmentTarget(left, state);
     if (wrap) write(state, ")", CAT_CLOSE_BRACKET);
@@ -759,28 +767,51 @@ function printForOfStatement(node: ESTree.ForOfStatement, state: State): void {
 }
 
 /**
- * The restriction is on the first token of the head rather than on the target as a whole,
- * so this walks down the leftmost spine - through member objects and parens -
- * to whatever prints first.
+ * Returns `true` if `left` needs wrapping in parentheses.
+ *
+ * This is the case if either:
+ * 1. The leading token when printing `left` would be `let`.
+ * 2. `left` is an identifier `async` and `wrapAsync` is `true`.
+ *
+ * `leftType` must be the `type` of `left`.
+ *
+ * The restriction for `let` is on the first token of the head rather than on the target as a whole,
+ * so this walks down the leftmost spine - through member objects and parens - to whatever prints first.
  */
-function forOfHeadStartsWithLet(left: ESTree.Expression): boolean {
-  // Whether the leading token would be `let`.
+function forOfHeadNeedsWrapping(
+  left: ESTree.AssignmentTarget | ESTree.Expression,
+  leftType: (ESTree.AssignmentTarget | ESTree.Expression)["type"],
+  wrapAsync: boolean,
+): boolean {
+  debugAssert(leftType === left.type, "`leftType` must equal `left.type`");
+
+  let computed = false;
+
   for (;;) {
-    switch (left.type) {
-      case "Identifier":
-        return left.name === "let";
+    switch (leftType) {
+      case "Identifier": {
+        // Computed member: `let[...]` is emitted as `(let)[...]`, so no longer starts with `let`.
+        //   Any other identifier isn't `let` either, so return `false` for all of them.
+        // Non-computed member: If identifier name is `let` (`let.x`), it needs to be wrapped.
+        // Not part of a member expression: `let` needs to be wrapped. `async` does too if `wrapAsync` is set.
+        if (computed) return false;
+
+        const leftName = (left as ESTree.IdentifierReference).name;
+        if (leftName === "let") return true;
+        return wrapAsync && leftName === "async";
+      }
       case "MemberExpression":
-        if (left.computed) {
-          const inner = withoutParens(left.object);
-          if (inner.type === "Identifier" && inner.name === "let") {
-            // `let[...]` is emitted as `(let)[...]`, so no longer starts with `let`
-            return false;
-          }
-        }
+        typeAssertIs<ESTree.MemberExpression>(left);
+        computed = left.computed;
         left = left.object;
+        leftType = left.type;
+        // `async` only needs wrapping when it's a plain identifier e.g. `for ((async) of arr)`,
+        // but not when part of a `MemberExpression` e.g. `for (async.x of arr)`
+        wrapAsync = false;
         break;
       case "ParenthesizedExpression":
-        left = left.expression;
+        left = (left as ESTree.ParenthesizedExpression).expression;
+        leftType = left.type;
         break;
       default:
         return false;
@@ -797,11 +828,12 @@ function forOfHeadStartsWithLet(left: ESTree.Expression): boolean {
  * on the current line.
  */
 function printBody(stmt: ESTree.Statement, state: State): void {
-  if (stmt.type === "BlockStatement") {
+  const stmtType = stmt.type;
+  if (stmtType === "BlockStatement") {
     write(state, " ", CAT_OTHER);
     printBlockStatement(stmt, state);
     write(state, "\n", CAT_OTHER);
-  } else if (stmt.type === "EmptyStatement") {
+  } else if (stmtType === "EmptyStatement") {
     write(state, ";\n", CAT_OTHER);
   } else {
     state.pendingIndentAsSpace = true;
