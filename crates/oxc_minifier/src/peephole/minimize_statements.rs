@@ -11,6 +11,7 @@ use oxc_ecmascript::{
 };
 use oxc_semantic::ScopeFlags;
 use oxc_span::{ContentEq, GetSpan, GetSpanMut, SPAN};
+use oxc_str::JSStr;
 use oxc_syntax::symbol::SymbolId;
 
 use crate::{TraverseCtx, is_terminated::IsTerminated, keep_var::KeepVar};
@@ -202,7 +203,7 @@ impl<'a> PeepholeOptimizations {
     /// import { bar } from "other";
     /// ```
     pub fn merge_imports(stmts: &mut ArenaVec<'a, Statement<'a>>, ctx: &mut TraverseCtx<'a>) {
-        let mut import_cache: ArenaHashMap<'a, &'a str, ArenaVec<'a, usize>> =
+        let mut import_cache: ArenaHashMap<'a, JSStr<'a>, ArenaVec<'a, usize>> =
             ArenaHashMap::new_in(ctx.allocator());
         let mut merges = ArenaVec::new_in(ctx);
 
@@ -216,7 +217,7 @@ impl<'a> PeepholeOptimizations {
                 continue;
             };
             let candidates = import_cache
-                .entry(import_decl.source.value.as_str())
+                .entry(import_decl.source.value)
                 .or_insert_with(|| ArenaVec::new_in(ctx));
             let target_index = candidates.iter().find_map(|&target_index| {
                 let Some(Statement::ImportDeclaration(target)) = stmts.get(target_index) else {
@@ -548,8 +549,9 @@ impl<'a> PeepholeOptimizations {
         if ctx.options().sequences
             && let Some(Statement::ExpressionStatement(prev_expr_stmt)) = result.last_mut()
         {
+            let span = prev_expr_stmt.span;
             ctx.replace_expression_with(&mut prev_expr_stmt.expression, |a, ctx| {
-                Self::join_sequence(a, expr, ctx)
+                Self::join_sequence(span, a, expr, ctx)
             });
         } else {
             result.push(Statement::new_expression_statement(expr.span(), expr, ctx));
@@ -571,8 +573,8 @@ impl<'a> PeepholeOptimizations {
         }
         let last_epr = result.pop().unwrap();
         let Statement::ExpressionStatement(prev_expr_stmt) = last_epr else { unreachable!() };
-        let a = prev_expr_stmt.unbox().expression;
-        ctx.replace_expression_with(target, |b, ctx| Self::join_sequence(a, b, ctx));
+        let ExpressionStatement { span, expression: a, .. } = prev_expr_stmt.unbox();
+        ctx.replace_expression_with(target, |b, ctx| Self::join_sequence(span, a, b, ctx));
     }
 
     /// For variable declarations:
@@ -2137,6 +2139,15 @@ impl<'a> PeepholeOptimizations {
                 }
             }
             Expression::TaggedTemplateExpression(tagged_expr) => {
+                // A member tag would change `this`: `let c = a.b; c``` => `(0, a.b)```
+                let keep_indirect = tagged_expr.tag.is_specific_id(search_for)
+                    && match &*replacement {
+                        match_member_expression!(Expression) => true,
+                        Expression::ChainExpression(chain) => {
+                            matches!(&chain.expression, match_member_expression!(ChainElement))
+                        }
+                        _ => false,
+                    };
                 if let Some(changed) = Self::substitute_single_use_symbol_in_expression(
                     &mut tagged_expr.tag,
                     search_for,
@@ -2144,6 +2155,11 @@ impl<'a> PeepholeOptimizations {
                     replacement_has_side_effect,
                     ctx,
                 ) {
+                    if changed && keep_indirect {
+                        ctx.replace_expression_with(&mut tagged_expr.tag, |tag, ctx| {
+                            Self::preserve_indirect_access(tag.span(), tag, ctx)
+                        });
+                    }
                     return Some(changed);
                 }
                 for elem in &mut tagged_expr.quasi.expressions {
