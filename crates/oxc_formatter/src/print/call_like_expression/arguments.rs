@@ -1,10 +1,10 @@
 use oxc_allocator::ArenaVec;
 use oxc_ast::ast::*;
-use oxc_formatter_core::{FormatElement, RemoveSoftLinesBuffer, format_element};
+use oxc_formatter_core::{FormatElement, format_element};
 use oxc_span::GetSpan;
 
 use crate::{
-    Buffer, Format, FormatTrailingCommas, TrailingSeparator,
+    Format, FormatTrailingCommas, TrailingSeparator,
     ast_nodes::{AstNode, AstNodes},
     format_args,
     formatter::{
@@ -218,14 +218,14 @@ pub fn is_function_composition_args(args: &[Argument<'_>]) -> bool {
     false
 }
 
-fn format_all_elements_broken_out<'a, 'b>(
-    node: &'b AstNode<'a, ArenaVec<'a, Argument<'a>>>,
+fn format_all_elements_broken_out<'a>(
+    node: &AstNode<'a, ArenaVec<'a, Argument<'a>>>,
     elements: impl Iterator<Item = (Option<FormatElement<'a>>, usize)>,
     expand: bool,
-    mut buffer: impl Buffer<'a, JsFormatContext<'a>>,
+    f: &mut JsFormatter<'_, 'a>,
 ) {
     write!(
-        buffer,
+        f,
         [group(&format_args!(
             "(",
             soft_block_indent(&format_once(move |f| {
@@ -254,14 +254,14 @@ fn format_all_elements_broken_out<'a, 'b>(
     );
 }
 
-fn format_all_args_broken_out<'a, 'b>(
-    node: &'b AstNode<'a, ArenaVec<'a, Argument<'a>>>,
+fn format_all_args_broken_out<'a>(
+    node: &AstNode<'a, ArenaVec<'a, Argument<'a>>>,
     expand: bool,
-    mut buffer: impl Buffer<'a, JsFormatContext<'a>>,
+    f: &mut JsFormatter<'_, 'a>,
 ) {
     let last_index = node.len() - 1;
     write!(
-        buffer,
+        f,
         [group(&format_args!(
             "(",
             soft_block_indent(&format_with(move |f| {
@@ -686,8 +686,8 @@ fn write_grouped_arguments<'a>(
     }
 
     // First write the most expanded variant because it needs `arguments`.
-    let most_expanded = best_fitting_variant(f.state_mut(), |buffer| {
-        format_all_elements_broken_out(node, elements.iter().cloned(), true, buffer);
+    let most_expanded = best_fitting_variant(f, |f| {
+        format_all_elements_broken_out(node, elements.iter().cloned(), true, f);
     });
 
     // Now reformat the first or last argument if they happen to be a function or arrow function expression.
@@ -738,7 +738,7 @@ fn write_grouped_arguments<'a>(
             // If they break even without soft lines, we need to use the expanded layout.
             // However, decorated functions are allowed to break while staying hugged.
             let interned = f.intern(&format_once(|f| {
-                RemoveSoftLinesBuffer::new(f).write_element(cached_element);
+                f.remove_soft_lines(|f| f.write_element(cached_element));
             }));
 
             if let Some(interned) = interned {
@@ -767,7 +767,7 @@ fn write_grouped_arguments<'a>(
     }
 
     // Write the second variant that forces the group of the first/last argument to expand.
-    let middle_variant = best_fitting_variant(f.state_mut(), |buffer| {
+    let middle_variant = best_fitting_variant(f, |buffer| {
         write!(
             buffer,
             [
@@ -808,7 +808,7 @@ fn write_grouped_arguments<'a>(
         ArenaVec::from_array_in([middle_variant, most_expanded], f)
     } else {
         // Write the most flat variant with the first or last argument grouped.
-        let most_flat = best_fitting_variant(f.state_mut(), |buffer| {
+        let most_flat = best_fitting_variant(f, |buffer| {
             write!(
                 buffer,
                 [
