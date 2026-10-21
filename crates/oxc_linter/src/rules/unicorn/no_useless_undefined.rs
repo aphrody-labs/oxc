@@ -1,6 +1,6 @@
 use oxc_ast::{
     AstKind,
-    ast::{Argument, CallExpression, Expression, VariableDeclarationKind},
+    ast::{Argument, CallExpression, Expression},
 };
 use oxc_diagnostics::OxcDiagnostic;
 use oxc_macros::declare_oxc_lint;
@@ -172,9 +172,7 @@ impl Rule for NoUselessUndefined {
 
     fn run<'a>(&self, node: &AstNode<'a>, ctx: &LintContext<'a>) {
         match node.kind() {
-            AstKind::IdentifierReference(undefined_literal)
-                if undefined_literal.name == "undefined" =>
-            {
+            AstKind::IdentifierReference(undefined_literal) if undefined_literal.is_undefined() => {
                 let Some(parent_node) = outermost_paren_parent(node, ctx) else {
                     return;
                 };
@@ -234,7 +232,7 @@ impl Rule for NoUselessUndefined {
                         else {
                             return;
                         };
-                        if declaration.kind == VariableDeclarationKind::Const {
+                        if declaration.kind.is_const() {
                             return;
                         }
                         if is_has_function_return_type(parent_node, ctx) {

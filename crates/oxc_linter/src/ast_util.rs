@@ -154,7 +154,7 @@ impl<'a> IsConstant<'a, '_> for Expression<'a> {
                 paren_expr.expression.is_constant(in_boolean_position, semantic)
             }
             Self::Identifier(ident) => {
-                ident.name == "undefined" && semantic.is_reference_to_global_variable(ident)
+                ident.is_undefined() && semantic.is_reference_to_global_variable(ident)
             }
             _ if self.is_literal() => true,
             _ => false,
@@ -963,7 +963,6 @@ pub fn is_node_within_call_argument<'a>(
     call: &CallExpression<'a>,
     target_arg_index: usize,
 ) -> bool {
-    // Early exit for out-of-bounds index
     if target_arg_index >= call.arguments.len() {
         return false;
     }
