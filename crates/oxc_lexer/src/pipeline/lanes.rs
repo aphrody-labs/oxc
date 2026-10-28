@@ -13,24 +13,24 @@ use std::{ptr, str};
 ))]
 use std::arch::x86_64::*;
 
-use oxc_ast::ast::{Comment, CommentKind, RegExpFlags};
+use oxc_ast::ast::{Comment, RegExpFlags};
 use oxc_syntax::identifier::{is_identifier_part, is_identifier_start};
 
 use crate::{
-    comment_meta,
     error::{DiagCode, DiagSeverity, Diagnostic},
     token::StringSpan,
 };
 
+use crate::pipeline::disambiguate::DisambiguateState;
+
 #[derive(Default)]
-pub struct Lanes {
+pub(crate) struct Lanes {
     pub numbers: Vec<f64>,
     pub strings: Vec<StringSpan>,
     pub templates: Vec<StringSpan>,
     pub atoms: Vec<StringSpan>,
     pub regex_flags: Vec<u8>,
     pub cooked: Vec<u8>,
-    pub comment_meta: Vec<u8>,
     pub comments: Vec<Comment>,
     /// Lexer diagnostics, pushed only on cold error paths; empty for valid input.
     pub diags: Vec<Diagnostic>,
@@ -42,21 +42,20 @@ pub struct Lanes {
     /// code-level survivors pay the identifier-char check. Empty for
     /// pure-ASCII input.
     pub unicode_leads: Vec<u32>,
-    pub module: bool,
+    pub(super) module: bool,
     /// What the disambiguation questions keep across the lex: the context walks,
     /// the bracket bitmap and the closers the forward scans resolved.
-    pub(crate) disambiguate: crate::pipeline::DisambiguateState,
+    pub(super) disambiguate: DisambiguateState,
 }
 
 impl Lanes {
-    pub fn clear(&mut self) {
+    pub(super) fn clear(&mut self) {
         self.numbers.clear();
         self.strings.clear();
         self.templates.clear();
         self.atoms.clear();
         self.regex_flags.clear();
         self.cooked.clear();
-        self.comment_meta.clear();
         self.comments.clear();
         self.diags.clear();
         self.diag_suppress.clear();
@@ -64,7 +63,7 @@ impl Lanes {
     }
 
     #[inline]
-    pub fn push_regex_flags(&mut self, src: &[u8], fs: usize, fe: usize) {
+    pub(super) fn push_regex_flags(&mut self, src: &[u8], fs: usize, fe: usize) {
         let mut f: u8 = 0;
         for (k, &c) in src[fs..fe].iter().enumerate() {
             let bit: u8 = match c {
@@ -93,7 +92,7 @@ impl Lanes {
     /// the hot carve body.
     #[cold]
     #[inline(never)]
-    pub fn push_diag(&mut self, off: u32, len: u32, code: DiagCode) {
+    pub(super) fn push_diag(&mut self, off: u32, len: u32, code: DiagCode) {
         self.diags.push(Diagnostic { off, len, code, severity: DiagSeverity::Error });
     }
 
@@ -103,7 +102,7 @@ impl Lanes {
     /// parser's escape reader skips them. LS/PS are legal string content.
     #[cold]
     #[inline(never)]
-    pub fn push_line_terminator_in_string(&mut self, src: &[u8], s: usize, end: usize) {
+    pub(super) fn push_line_terminator_in_string(&mut self, src: &[u8], s: usize, end: usize) {
         let mut i = s + 1; // past the opening quote
         let mut term_end = end; // fallback (unreachable: the scanner saw a terminator)
         while i < end {
@@ -134,7 +133,7 @@ impl Lanes {
     /// at `e2` plus the run of identifier-start chars after it.
     #[cold]
     #[inline(never)]
-    pub fn push_num_end_diag(&mut self, src: &[u8], e2: usize, code: DiagCode) {
+    pub(super) fn push_num_end_diag(&mut self, src: &[u8], e2: usize, code: DiagCode) {
         let end = ident_start_run_end(src, e2 + 1);
         self.push_diag(e2 as u32, (end - e2) as u32, code);
     }
@@ -145,7 +144,7 @@ impl Lanes {
     /// here.
     #[cold]
     #[inline(never)]
-    pub fn push_num_end_diag_unicode(&mut self, src: &[u8], e2: usize) {
+    pub(super) fn push_num_end_diag_unicode(&mut self, src: &[u8], e2: usize) {
         let Some(ch) = decode_char_at(src, e2) else { return };
         if !is_identifier_start(ch) {
             return;
@@ -214,13 +213,13 @@ impl Lanes {
     }
 
     #[inline]
-    pub fn push_string(&mut self, src: &[u8], bs: usize, be: usize) {
+    pub(super) fn push_string(&mut self, src: &[u8], bs: usize, be: usize) {
         let (sp, _) = self.cook::<true, false>(src, bs as u32, be as u32);
         self.strings.push(sp);
     }
 
     #[inline]
-    pub fn push_template(&mut self, src: &[u8], bs: usize, be: usize) {
+    pub(super) fn push_template(&mut self, src: &[u8], bs: usize, be: usize) {
         let (sp, nes) = self.cook::<false, true>(src, bs as u32, be as u32);
         // A NotEscapeSequence means cooked = None per the grammar; legality
         // depends on tagged-ness (parser context), so the span carries a
@@ -231,7 +230,7 @@ impl Lanes {
     /// Push a string value verbatim. JSX attribute strings have no backslash
     /// escapes; the value is the raw slice between the quotes.
     #[inline]
-    pub fn push_string_raw(&mut self, src: &[u8], bs: usize, be: usize) {
+    pub(super) fn push_string_raw(&mut self, src: &[u8], bs: usize, be: usize) {
         let ss = self.cooked.len() as u32;
         if be <= bs {
             self.strings.push(StringSpan::new(ss, ss & StringSpan::END_MASK, false));
@@ -249,7 +248,7 @@ impl Lanes {
     }
 
     #[inline]
-    pub fn push_atom(&mut self, src: &[u8], bs: usize, be: usize) {
+    pub(super) fn push_atom(&mut self, src: &[u8], bs: usize, be: usize) {
         // Escaped-identifier atoms are the one funnel every code-level
         // identifier escape passes through, so validation rides here.
         self.validate_ident_escapes(src, bs, be);
@@ -396,12 +395,7 @@ impl Lanes {
     }
 
     #[inline]
-    pub fn push_number(&mut self, src: &[u8], s: usize, e: usize) {
-        self.numbers.push(parse_number(src, s, e));
-    }
-
-    #[inline]
-    pub fn push_number_swar(&mut self, src: &[u8], s: usize, e: usize) {
+    pub(super) fn push_number(&mut self, src: &[u8], s: usize, e: usize) {
         let len = e - s;
         if len.wrapping_sub(1) <= 7 && !(len > 1 && src[s] == b'0') {
             let keep = KEEP[len];
@@ -427,65 +421,6 @@ impl Lanes {
         }
         self.numbers.push(parse_number(src, s, e));
     }
-
-    #[inline]
-    pub fn push_comment_record(
-        &mut self,
-        src: &[u8],
-        sl: usize,
-        start: u32,
-        end: u32,
-        blk: bool,
-        meta: u8,
-    ) {
-        let kind = if !blk {
-            CommentKind::Line
-        } else if meta & comment_meta::META_MULTILINE != 0 {
-            CommentKind::MultiLineBlock
-        } else {
-            CommentKind::SingleLineBlock
-        };
-        let mut c = Comment::new(start, end.min(sl as u32), kind);
-        c.content = comment_meta::content_from_ordinal(meta);
-
-        let s_ = (start as usize).min(sl);
-        let mut q = s_;
-        let pre = loop {
-            if q == 0 {
-                break true;
-            }
-            let b = src[q - 1];
-            if b == b'\n' || b == b'\r' {
-                break true;
-            }
-            if !is_lex_ws(b) {
-                break false;
-            }
-            q -= 1;
-        };
-        c.set_preceded_by_newline(pre);
-
-        if !blk {
-            c.set_followed_by_newline(true);
-        } else {
-            let mut e = (end as usize).min(sl);
-            let mut post = false;
-            while e < sl && is_lex_ws(src[e]) {
-                if src[e] == b'\n' || src[e] == b'\r' {
-                    post = true;
-                    break;
-                }
-                e += 1;
-            }
-            c.set_followed_by_newline(post);
-        }
-        self.comments.push(c);
-    }
-}
-
-#[inline]
-fn is_lex_ws(c: u8) -> bool {
-    matches!(c, b' ' | b'\t' | b'\n' | b'\r' | 0x0b | 0x0c)
 }
 
 static KEEP: [u64; 9] = [
