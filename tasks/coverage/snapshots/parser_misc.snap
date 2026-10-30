@@ -1,6 +1,6 @@
 parser_misc Summary:
-AST Parsed     : 128/128 (100.00%)
-Positive Passed: 128/128 (100.00%)
+AST Parsed     : 130/130 (100.00%)
+Positive Passed: 130/130 (100.00%)
 Negative Passed: 265/265 (100.00%)
 
   × TS(1275): 'accessor' modifier can only appear on a property declaration.
@@ -5144,12 +5144,12 @@ Negative Passed: 265/265 (100.00%)
    ╰────
   help: This character or escape sequence is not valid inside a character class
 
-  × Invalid regular expression: Could not parse the entire pattern
-   ╭─[misc/fail/regexp-unicode-leading-zero-reference.js:1:5]
+  × Invalid regular expression: Invalid escape sequence
+   ╭─[misc/fail/regexp-unicode-leading-zero-reference.js:1:4]
  1 │ /()\01/u;
-   ·     ▲
+   ·    ─
    ╰────
-  help: Check for unbalanced brackets or invalid escape sequences
+  help: Use a valid escape sequence or escape the backslash with `\\`
 
   × Invalid rest element target in destructuring assignment
    ╭─[misc/fail/rest-assignment-target.js:1:6]
