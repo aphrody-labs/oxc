@@ -42,12 +42,4 @@ DUMP_IR=1 cargo run -p oxc_formatter_htmlish --example htmlish_formatter [filena
 node apps/oxfmt/node_modules/prettier/bin/prettier.cjs [filename]
 ```
 
-### Prettier conformance
-
-`tests/conformance.rs` runs `tests/format/html`.
-Files whose output depends on embedded formatting (`<script>` / `<style>` bodies, `style` / `on*` attributes, a YAML front matter body) are ignored here and covered by oxfmt's E2E conformance;
-the ignore list names the reason for each.
-
-Every failing file is accounted for by a DIVERGENCES.md entry's `Conformance:` line; there are no unclassified failures.
-
 Fixtures and the example read `.vue` as Vue, `.xhtml` / `.xht` as XHTML and `*.component.html` as Angular.

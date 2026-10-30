@@ -1,33 +1,28 @@
 // oxlint-disable no-console, no-await-in-loop
 
 import { createTwoFilesPatch } from "diff";
-import {
-  existsSync,
-  globSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import prettier from "prettier";
 import * as astroPlugin from "prettier-plugin-astro";
 import * as sveltePlugin from "prettier-plugin-svelte";
 import { format } from "../dist/index.js";
+import { assertDownloaded, sources } from "./download-fixtures.ts";
+import {
+  collectDivergences,
+  type Divergence,
+  divergencesOf,
+  listDivergences,
+  FIXTURES_DIR,
+  SNAPSHOTS_DIR,
+  checkStaleDivergences,
+} from "./shared.ts";
 
-const CONFORMANCE_DIR = import.meta.dirname;
-const FIXTURES_DIR = join(CONFORMANCE_DIR, "fixtures");
 const EXTERNALS_DIR = join(FIXTURES_DIR, "externals");
-const SNAPSHOTS_DIR = join(CONFORMANCE_DIR, "snapshots");
-const REPO_ROOT = join(CONFORMANCE_DIR, "..", "..", "..");
-const DIVERGENCES_FILES = globSync("{apps/oxfmt,crates/oxc_formatter*}/DIVERGENCES.md", {
-  cwd: REPO_ROOT,
-});
 
 type Category = {
   name: string;
-  /** Test suites (Prettier's own, the plugins', `edge-cases/`): compared as written. */
+  /** Test suites (the plugins', `edge-cases/`): compared as written. */
   fixtures: Source[];
   /** Real-world projects: compared on Prettier's output of the file, as written when it has no stable one. */
   projects: Source[];
@@ -37,7 +32,7 @@ type Category = {
 type Source = {
   dir: string;
   ext?: string;
-  /** Files to exclude (e.g. test runner files that are not fixtures) */
+  /** Path substrings to skip (e.g. deliberately broken inputs) */
   excludes?: string[];
   /** Transform relative path to a filepath for formatting (e.g. "xxx/input.html" → "xxx.svelte") */
   resolveFilePath?: (name: string) => string;
@@ -46,15 +41,7 @@ type Source = {
 const categories: Category[] = [
   {
     name: "js-in-vue",
-    fixtures: [
-      {
-        dir: join(EXTERNALS_DIR, "prettier"),
-        ext: ".vue",
-        // Parser error messages and range formatting are not formatter concerns
-        excludes: ["/_errors_/", "vue/range/"],
-      },
-      { dir: join(FIXTURES_DIR, "edge-cases", "js-in-vue") },
-    ],
+    fixtures: [{ dir: join(FIXTURES_DIR, "edge-cases", "js-in-vue") }],
     projects: [{ dir: join(EXTERNALS_DIR, "vue-vben-admin"), ext: ".vue" }],
     optionSets: [
       { printWidth: 80 },
@@ -63,93 +50,37 @@ const categories: Category[] = [
   },
   {
     name: "gql-in-js",
-    fixtures: [
-      {
-        dir: join(EXTERNALS_DIR, "prettier", "js/multiparser-graphql"),
-        ext: ".js",
-        excludes: ["format.test.js"],
-      },
-      { dir: join(FIXTURES_DIR, "edge-cases", "gql-in-js") },
-    ],
+    fixtures: [{ dir: join(FIXTURES_DIR, "edge-cases", "gql-in-js") }],
     projects: [],
     optionSets: [{ printWidth: 80 }, { printWidth: 100 }],
   },
   {
     name: "css-in-js",
-    fixtures: [
-      {
-        dir: join(EXTERNALS_DIR, "prettier", "js/multiparser-css"),
-        ext: ".js",
-        excludes: ["format.test.js"],
-      },
-      {
-        dir: join(EXTERNALS_DIR, "prettier", "jsx/embed"),
-        ext: ".js",
-        excludes: ["format.test.js"],
-      },
-      { dir: join(FIXTURES_DIR, "edge-cases", "css-in-js") },
-    ],
+    fixtures: [{ dir: join(FIXTURES_DIR, "edge-cases", "css-in-js") }],
     projects: [],
     optionSets: [{ printWidth: 80 }, { printWidth: 100 }],
   },
   {
     name: "html-in-js",
-    fixtures: [
-      {
-        dir: join(EXTERNALS_DIR, "prettier", "js/multiparser-html"),
-        ext: ".js",
-        excludes: ["format.test.js"],
-      },
-      {
-        dir: join(EXTERNALS_DIR, "prettier", "js/embeded"),
-        ext: ".js",
-        excludes: ["format.test.js"],
-      },
-      { dir: join(FIXTURES_DIR, "edge-cases", "html-in-js") },
-    ],
+    fixtures: [{ dir: join(FIXTURES_DIR, "edge-cases", "html-in-js") }],
     projects: [{ dir: join(EXTERNALS_DIR, "webawesome"), ext: ".ts" }],
     optionSets: [{ printWidth: 80 }, { printWidth: 100, htmlWhitespaceSensitivity: "ignore" }],
   },
   {
     name: "angular-in-js",
-    fixtures: [
-      {
-        dir: join(EXTERNALS_DIR, "prettier", "typescript/angular-component-examples"),
-        ext: ".ts",
-      },
-      { dir: join(FIXTURES_DIR, "edge-cases", "angular-in-js") },
-    ],
+    fixtures: [{ dir: join(FIXTURES_DIR, "edge-cases", "angular-in-js") }],
     projects: [],
     optionSets: [{ printWidth: 80 }, { printWidth: 100, htmlWhitespaceSensitivity: "ignore" }],
   },
   {
     name: "md-in-js",
-    fixtures: [
-      {
-        dir: join(EXTERNALS_DIR, "prettier", "js/multiparser-markdown"),
-        ext: ".js",
-        excludes: ["format.test.js"],
-      },
-      { dir: join(FIXTURES_DIR, "edge-cases", "md-in-js") },
-    ],
+    fixtures: [{ dir: join(FIXTURES_DIR, "edge-cases", "md-in-js") }],
     projects: [],
     optionSets: [{ printWidth: 80 }, { printWidth: 100, proseWrap: "always" }],
   },
   {
     name: "xxx-in-js-comment",
-    fixtures: [
-      {
-        dir: join(EXTERNALS_DIR, "prettier", "js/multiparser-html/language-comment"),
-        ext: ".js",
-        excludes: ["format.test.js"],
-      },
-      {
-        dir: join(EXTERNALS_DIR, "prettier", "js/multiparser-comments"),
-        ext: ".js",
-        excludes: ["format.test.js"],
-      },
-      { dir: join(FIXTURES_DIR, "edge-cases", "xxx-in-js-comment") },
-    ],
+    fixtures: [{ dir: join(FIXTURES_DIR, "edge-cases", "xxx-in-js-comment") }],
     projects: [],
     optionSets: [{ printWidth: 80 }, { printWidth: 100 }],
   },
@@ -204,16 +135,8 @@ const categories: Category[] = [
     ],
   },
   {
-    name: "markdown",
-    fixtures: [
-      {
-        dir: join(EXTERNALS_DIR, "prettier", "markdown"),
-        ext: ".md",
-        // Cursor offsets and plugin loading are not formatter concerns
-        excludes: ["markdown/cursor/", "markdown/broken-plugins/"],
-      },
-      { dir: join(FIXTURES_DIR, "edge-cases", "xxx-in-md") },
-    ],
+    name: "xxx-in-md",
+    fixtures: [{ dir: join(FIXTURES_DIR, "edge-cases", "xxx-in-md") }],
     projects: [],
     optionSets: [{ printWidth: 80 }, { printWidth: 100, proseWrap: "always" }],
   },
@@ -226,21 +149,13 @@ const categories: Category[] = [
       { dir: join(EXTERNALS_DIR, "mdn-css-guides"), ext: ".md" },
     ],
     // mdn's own `.prettierrc` first: the documents are already formatted by it.
-    // `proseWrap: always` is left to the `markdown` category,
+    // `proseWrap: always` is left to `run_prettier.ts` (Prettier's own markdown suite),
     // mdn's GitHub alerts and macros would fail on known divergences (`line-shapes`) in bulk.
     optionSets: [{ printWidth: 80, bracketSameLine: true }, { printWidth: 100 }],
   },
   {
     name: "html",
-    fixtures: [
-      {
-        dir: join(EXTERNALS_DIR, "prettier", "html"),
-        ext: ".html",
-        // Parser error messages, cursor offsets and pragma insertion are not formatter concerns
-        excludes: ["/_errors_/", "html/cursor/", "html/pragma/"],
-      },
-      { dir: join(FIXTURES_DIR, "edge-cases", "html") },
-    ],
+    fixtures: [{ dir: join(FIXTURES_DIR, "edge-cases", "html") }],
     // Real-world pages: demos and playgrounds, dense with `<script>` / `<style>`
     projects: [
       // vite's `invalid*.html` are deliberately broken, both sides error
@@ -309,6 +224,7 @@ const categories: Category[] = [
 
 // ---
 
+assertDownloaded(sources.map(({ name }) => name).filter((name) => name !== "prettier"));
 const divergences = collectDivergences();
 const results: CategoryResult[] = [];
 
@@ -335,38 +251,19 @@ for (const category of categories) {
 
 writeReport(results, divergences);
 
-const failedNames = new Set(
-  results.flatMap((r) => r.optionSetResults.flatMap((o) => o.failures.map((f) => f.name))),
-);
+const failedNames = [
+  ...new Set(
+    results.flatMap((r) => r.optionSetResults.flatMap((o) => o.failures.map((f) => f.name))),
+  ),
+];
 for (const name of failedNames) {
-  if (!divergences.has(name)) {
+  if (divergencesOf(divergences, name).length === 0) {
     console.warn(`WARNING: "${name}" fails and no DIVERGENCES.md entry lists it (unclassified)`);
   }
 }
-for (const [name, refs] of divergences) {
-  if (!failedNames.has(name)) {
-    console.warn(`WARNING: "${name}" passes but ${refs.join(", ")} lists it, remove it?`);
-  }
-}
+checkStaleDivergences(divergences, failedNames, { prettierSuite: false });
 
 // ---
-
-/** Fixture name -> `<file>#<slug>` for every backticked `externals/` / `edge-cases/` path in a DIVERGENCES.md entry. */
-function collectDivergences(): Map<string, string[]> {
-  const map = new Map<string, string[]>();
-  for (const file of DIVERGENCES_FILES) {
-    let slug = "";
-    for (const line of readFileSync(join(REPO_ROOT, file), "utf8").split("\n")) {
-      if (line.startsWith("## ")) slug = line.slice(3).trim();
-      for (const [, name] of line.matchAll(
-        /`(?:conformance\/fixtures\/)?((?:externals|edge-cases)\/[^`]+)`/g,
-      )) {
-        map.set(name, [...(map.get(name) ?? []), `${file}#${slug}`]);
-      }
-    }
-  }
-  return map;
-}
 
 type Fixture = { name: string; fullPath: string; isProject: boolean };
 
@@ -480,7 +377,7 @@ async function formatWithOxfmt(
   return res.errors.length === 0 ? res.code : "ERROR";
 }
 
-function writeReport(results: CategoryResult[], divergences: Map<string, string[]>) {
+function writeReport(results: CategoryResult[], divergences: Divergence[]) {
   const lines: string[] = [];
   const diffsDir = join(SNAPSHOTS_DIR, "diffs");
 
@@ -531,20 +428,17 @@ function writeReport(results: CategoryResult[], divergences: Map<string, string[
       lines.push("");
 
       if (r.failures.length > 0) {
-        for (const failure of r.failures) {
-          const safeName = failure.name.replaceAll("/", "__");
-          const diffRelPath = `diffs/${result.name}/${safeName}.md`;
-          const refs = divergences.get(failure.name)?.join(", ") ?? "unclassified";
-          lines.push(`- [${failure.name}](${diffRelPath})`);
-          lines.push(`  - ${refs}`);
-        }
-        lines.push("");
+        const items = r.failures.map(({ name }): [string, string] => {
+          const diffRelPath = `diffs/${result.name}/${name.replaceAll("/", "__")}.md`;
+          return [name, `- [${name}](${diffRelPath})`];
+        });
+        lines.push(...listDivergences(divergences, items), "");
       }
     }
   }
 
   mkdirSync(SNAPSHOTS_DIR, { recursive: true });
-  const outPath = join(SNAPSHOTS_DIR, "conformance.snap.md");
+  const outPath = join(SNAPSHOTS_DIR, "live.snap.md");
   writeFileSync(outPath, lines.join("\n"));
   console.log("=".repeat(60));
   console.log(`Report written to ${relative(process.cwd(), outPath)}`);

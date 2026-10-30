@@ -2184,24 +2184,14 @@ dependencies = [
  "oxc_span",
  "oxc_tasks_common",
  "pico-args",
- "serde_json",
 ]
 
 [[package]]
 name = "oxc_formatter_tests"
 version = "0.62.0"
 dependencies = [
- "cow-utils",
- "oxc_allocator",
- "oxc_ast",
- "oxc_ast_visit",
  "oxc_formatter_core",
- "oxc_parser",
- "oxc_span",
- "rustc-hash",
  "serde_json",
- "similar 3.2.0",
- "walkdir",
 ]
 
 [[package]]
@@ -2773,11 +2763,13 @@ dependencies = [
  "mimalloc-safe",
  "oxc_allocator",
  "oxc_formatter",
+ "oxc_linter",
  "oxc_minifier",
  "oxc_parser",
  "oxc_semantic",
  "oxc_tasks_common",
  "oxc_transformer",
+ "rustc-hash",
  "saphyr",
 ]
 
