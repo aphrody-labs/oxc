@@ -167,7 +167,7 @@ impl Lexer {
         self.ensure(n);
         self.lanes.clear();
         self.lanes.module = module;
-        self.lanes.disambiguate.begin(n, module);
+        self.lanes.disambiguate.begin(n, module, cpu);
         if n == 0 {
             write_sentinels(0, out_spans, out_kinds);
             self.sig_len = 0;
@@ -191,7 +191,7 @@ impl Lexer {
         // byte-identical to a build without it.
         classify(ts, sp, n, nb, word, st, kwinit, opch, digit, dot, misc, kind, cpu);
         let nesc = misc_pre(sp, n, nb, st, word, misc, kind, vutf8, &mut self.lanes, cpu);
-        carve(src, n, st, kind, opch, word, digit, dot, kwinit, jsx, ts, &mut self.lanes);
+        carve(src, n, st, kind, opch, word, digit, dot, kwinit, jsx, ts, &mut self.lanes, cpu);
         coalesce(sp, n, st, opch, word, digit, dot, kwinit, kind, kwpos, ts, &mut self.lanes, cpu);
         misc_post(sp, n, st, word, misc, kind, nesc, cpu);
         let sig_len = compress(

@@ -52,7 +52,7 @@ impl Walk {
             self.asi(tokens, pos);
         }
         // A binding that ended the line goes on with =, a comma or a type annotation only.
-        if newline && !self.operand_allowed() && self.top_declarator() == D_BOUND {
+        if newline && !self.operand_allowed() && self.top().declarator == Declarator::Bound {
             let c = tokens.src[pos];
             if !(k >= OP_KIND_BASE && matches!(c, b'=' | b',' | b':')) {
                 self.end_statement();
@@ -127,7 +127,7 @@ impl Walk {
         // Concise arrow bodies end with the statement.
         self.pop_concise();
         // An expression-embedded type region ends too.
-        while self.top_kind() == FrameKind::TypeRegion && self.top().state == R_EXPR {
+        while self.top_kind() == FrameKind::TypeRegion && self.top().region == RegionRule::Expr {
             self.pop();
         }
         if self.top_kind() == FrameKind::TypeRegion {
@@ -182,9 +182,9 @@ impl Walk {
 
     fn end_region_by_break(&mut self) {
         let r = self.pop();
-        match r.state {
-            R_STMT => self.end_statement(),
-            R_INLINE => {
+        match r.region {
+            RegionRule::Stmt => self.end_statement(),
+            RegionRule::Inline => {
                 // A declarator / member annotation ended by a line break.
                 match self.top_kind() {
                     FrameKind::ClassBody => {
@@ -199,12 +199,12 @@ impl Walk {
                     _ => self.end_statement(),
                 }
             }
-            R_EXPR => {
+            RegionRule::Expr => {
                 // `x as T` then a new line: the value is complete.
                 self.set_value();
                 self.no_type_args = true;
             }
-            _ => self.set_value(),
+            RegionRule::ArrowRet => self.set_value(),
         }
     }
 
@@ -216,8 +216,8 @@ impl Walk {
         if k == tk!(String) {
             // Module specifier: `import "x"`, `... from "x"`.
             let reg = self.stmt_reg();
-            if (reg == S_IMPORT && matches_tk!(self.prev_kw, KwImport | KwFrom))
-                || (reg == S_EXPORT && self.prev_kw == tk!(KwFrom))
+            if (reg == StmtReg::Import && matches_tk!(self.prev_kw, KwImport | KwFrom))
+                || (reg == StmtReg::Export && self.prev_kw == tk!(KwFrom))
             {
                 self.value_done();
                 let nx = tokens.peek(end);
@@ -225,14 +225,14 @@ impl Walk {
                     && !tokens.line_break_between(end, nx.pos)
                     && (tokens.ident_is(nx.pos, b"with") || tokens.ident_is(nx.pos, b"assert"));
                 if attrs {
-                    self.set_stmt_reg(S_ATTRS);
+                    self.set_stmt_reg(StmtReg::Attrs);
                     return;
                 }
                 self.stmt_done = true;
                 self.after_statement();
                 return;
             }
-            if reg == S_DECLARE_MODULE {
+            if reg == StmtReg::DeclareModule {
                 // `declare module "x"`: bodiless unless `{` follows.
                 self.value_done();
                 self.stmt_done = true;
@@ -241,8 +241,8 @@ impl Walk {
         }
         // Member keys.
         match self.top_kind() {
-            FrameKind::Object | FrameKind::ClassBody if self.top().state == M_KEY_POS => {
-                self.top_mut().state = M_KEY_SEEN;
+            FrameKind::Object | FrameKind::ClassBody if self.top().member == Member::KeyPos => {
+                self.top_mut().member = Member::KeySeen;
                 self.value_done();
                 return;
             }

@@ -40,7 +40,7 @@ pub unsafe fn coalesce(
     lanes: &mut Lanes,
     cpu: impl Cpu,
 ) {
-    lanes.disambiguate.restart(lanes.module);
+    lanes.disambiguate.restart(lanes.module, cpu);
     let nw = (n + 63) >> 6;
     let mut opprev: u64 = 0;
     let mut dtprev: u64 = 0;
@@ -155,7 +155,7 @@ pub unsafe fn coalesce(
                         &lanes.disambiguate.brackets,
                         &lanes.disambiguate.closers,
                     );
-                    let g = gt_run_split(&tokens, &mut lanes.disambiguate.walks, p, run);
+                    let g = gt_run_split(&tokens, &mut lanes.disambiguate.walks, p, run, cpu);
                     if g != 0 {
                         // Only `>`s stay split; the rest still munches, or `>>&&` would emit two `&`s.
                         cursor = munch_walk(src, n, st, opch, kind, p + g, cpu);
@@ -250,7 +250,7 @@ unsafe fn glue_number(
     cpu: impl Cpu,
 ) -> usize {
     loop {
-        let e2 = scan_number(src, n, p);
+        let e2 = scan_number(src, n, p, cpu);
         *kind.add(p) = tk!(Number) + (*src.add(e2 - 1) == b'n') as u8;
         if e2 > p + 1 {
             bm_clear_range(st, p + 1, e2 - 1);
@@ -317,7 +317,7 @@ unsafe fn glue_number(
                     &lanes.disambiguate.brackets,
                     &lanes.disambiguate.closers,
                 );
-                let g = gt_run_split(&tokens, &mut lanes.disambiguate.walks, e2, end - e2);
+                let g = gt_run_split(&tokens, &mut lanes.disambiguate.walks, e2, end - e2, cpu);
                 if g != 0 {
                     // The split `>`s stay single tokens, but whatever borders on them is still an operator run and has to be
                     // munched, or a following `&&` / `??` / `**` is emitted a byte at a time.

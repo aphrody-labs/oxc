@@ -3,6 +3,7 @@ use crate::error::DiagCode;
 use crate::pipeline::{
     bitmap::bm_get,
     bytes::{is_id_start, is_word, line_break_in},
+    cpu::{Cpu, apply, cpu_versions},
     disambiguate::jsx_over_generic,
     lanes::Lanes,
     token_view,
@@ -17,6 +18,7 @@ enum AngleVerdict {
     Ambiguous { gt: usize, lp: usize },
 }
 
+#[apply(cpu_versions)]
 #[inline]
 pub(super) unsafe fn jsx_over_type_params(
     src: *const u8,
@@ -30,11 +32,12 @@ pub(super) unsafe fn jsx_over_type_params(
     tpos: usize,
     ts: bool,
     lanes: &mut Lanes,
+    cpu: impl Cpu,
 ) -> bool {
     if !ts {
         return true;
     }
-    match ts_angle_verdict(srcs, n, tpos, word) {
+    match ts_angle_verdict(srcs, n, tpos, word, cpu) {
         AngleVerdict::TypeParams => false,
         AngleVerdict::Jsx => true,
         AngleVerdict::Ambiguous { gt, lp } => {
@@ -51,7 +54,7 @@ pub(super) unsafe fn jsx_over_type_params(
                 &lanes.disambiguate.closers,
             );
             let (jsx, unterminated) =
-                jsx_over_generic(&tokens, &mut lanes.disambiguate.walks, lt, lp);
+                jsx_over_generic(&tokens, &mut lanes.disambiguate.walks, lt, lp, cpu);
             if unterminated {
                 lanes.push_diag(lt as u32, (gt + 1 - lt) as u32, DiagCode::UnterminatedJsxElement);
             }
@@ -72,13 +75,20 @@ pub(super) unsafe fn jsx_over_type_params(
 /// has already cleared `word` across Unicode whitespace by the time
 /// `carve_jsx` runs, so the corrected run is free to read and no byte has to
 /// be re-scanned for a leading 0x80.
+#[apply(cpu_versions)]
 #[inline]
-unsafe fn ts_angle_verdict(src: &[u8], n: usize, t: usize, word: *const u64) -> AngleVerdict {
+unsafe fn ts_angle_verdict(
+    src: &[u8],
+    n: usize,
+    t: usize,
+    word: *const u64,
+    cpu: impl Cpu,
+) -> AngleVerdict {
     let mut p = t;
     // optional `const` type-parameter modifier: `<const T,>`. Like any modifier it must stay
     // on the line of its parameter; a comment between them is fine.
     if n - p >= 6 && &src[p..p + 5] == b"const" && !is_word(src[p + 5]) {
-        let qq = jsx_skip_trivia_fast(src.as_ptr(), n, p + 5);
+        let qq = jsx_skip_trivia_fast(src.as_ptr(), n, p + 5, cpu);
         // A modifier must be on the same line as its parameter, so `const` followed by a line break
         // can only be a JSX tag name, e.g. `<const\nextends U>` is JSX.
         if line_break_in(src, p + 5, qq) {
@@ -92,7 +102,7 @@ unsafe fn ts_angle_verdict(src: &[u8], n: usize, t: usize, word: *const u64) -> 
         p += 1; // first type-parameter identifier
     }
     // The signal may sit behind whitespace (Unicode too) or a comment: `<T /*c*/ extends U>`.
-    p = jsx_skip_trivia_fast(src.as_ptr(), n, p);
+    p = jsx_skip_trivia_fast(src.as_ptr(), n, p, cpu);
     if p >= n {
         return AngleVerdict::Jsx;
     }
@@ -101,7 +111,7 @@ unsafe fn ts_angle_verdict(src: &[u8], n: usize, t: usize, word: *const u64) -> 
         return AngleVerdict::TypeParams; // `<T,>`  `<T,U>`  `<T = D>`
     }
     if c == b'>' {
-        let q = jsx_skip_trivia_fast(src.as_ptr(), n, p + 1);
+        let q = jsx_skip_trivia_fast(src.as_ptr(), n, p + 1, cpu);
         let v = if q < n && src[q] == b'(' {
             AngleVerdict::Ambiguous { gt: p, lp: q }
         } else {
@@ -112,7 +122,7 @@ unsafe fn ts_angle_verdict(src: &[u8], n: usize, t: usize, word: *const u64) -> 
     // `extends` is also a legal JSX attribute name; it signals a generic only
     // as a full word not followed by `=` (attr value) or `>` (boolean attr).
     if n - p >= 7 && &src[p..p + 7] == b"extends" && !bm_get(word, p + 7) {
-        let qq = jsx_skip_trivia_fast(src.as_ptr(), n, p + 7);
+        let qq = jsx_skip_trivia_fast(src.as_ptr(), n, p + 7, cpu);
         let d = if qq < n { src[qq] } else { 0 };
         if d == b'/' && !matches!(if qq + 1 < n { src[qq + 1] } else { 0 }, b'*' | b'/') {
             return AngleVerdict::Jsx;

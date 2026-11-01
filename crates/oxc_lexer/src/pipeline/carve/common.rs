@@ -3,6 +3,7 @@ use crate::{error::DiagCode, token::tk};
 use crate::pipeline::{
     bitmap::{bm_clear, bm_clear_range, bm_get, bm_next0},
     bytes::hex_val,
+    cpu::{Cpu, apply, cpu_versions},
     disambiguate::not_operator_position,
     find::find,
     lanes::Lanes,
@@ -30,9 +31,10 @@ pub(super) unsafe fn lex_string(
     s: usize,
     c: u8,
     lanes: &mut Lanes,
+    cpu: impl Cpu,
 ) -> usize {
     let mut saw_nl = false;
-    let e = scan_quoted(src, n, s + 1, c, &mut saw_nl);
+    let e = scan_quoted(src, n, s + 1, c, &mut saw_nl, cpu);
     let end = if e < n { e + 1 } else { n };
     if saw_nl {
         // The terminator wins over unterminated-at-EOF, same as oxc_parser.
@@ -51,7 +53,7 @@ pub(super) unsafe fn lex_string(
     } else {
         n
     };
-    lanes.push_string(srcs, s + 1, be);
+    lanes.push_string(srcs, s + 1, be, cpu);
     end
 }
 
@@ -70,9 +72,10 @@ pub(super) unsafe fn lex_template_segment(
     head_kind: u8,
     flat_kind: u8,
     lanes: &mut Lanes,
+    cpu: impl Cpu,
 ) -> (usize, bool) {
     let mut term = 0i32;
-    let end = scan_tmpl_text(src, n, s + 1, &mut term);
+    let end = scan_tmpl_text(src, n, s + 1, &mut term, cpu);
     if term == 0 {
         lanes.push_diag(s as u32, (end - s) as u32, DiagCode::UnterminatedTemplate);
     }
@@ -80,7 +83,7 @@ pub(super) unsafe fn lex_template_segment(
     if end > s + 1 {
         bm_clear_range(st, s + 1, end - 1);
     }
-    lanes.push_template(srcs, s + 1, end - [0usize, 1, 2][term as usize]);
+    lanes.push_template(srcs, s + 1, end - [0usize, 1, 2][term as usize], cpu);
     (end, term == 2)
 }
 
@@ -98,12 +101,13 @@ pub(super) unsafe fn lex_slash(
     ts: bool,
     s: usize,
     lanes: &mut Lanes,
+    cpu: impl Cpu,
 ) -> usize {
     let d = if s + 1 < n { *src.add(s + 1) } else { 0 };
     if d == b'/' {
-        lex_line_comment(src, srcs, n, st, kind, s, lanes)
+        lex_line_comment(src, srcs, n, st, kind, s, lanes, cpu)
     } else if d == b'*' {
-        lex_block_comment(src, srcs, n, st, kind, s, lanes)
+        lex_block_comment(src, srcs, n, st, kind, s, lanes, cpu)
     } else if not_operator_position(
         &token_view(
             src,
@@ -119,8 +123,9 @@ pub(super) unsafe fn lex_slash(
         ),
         &mut lanes.disambiguate.walks,
         s,
+        cpu,
     ) {
-        lex_regex(src, srcs, n, st, kind, word, s, lanes)
+        lex_regex(src, srcs, n, st, kind, word, s, lanes, cpu)
     } else if s + 1 < n && *src.add(s + 1) == b'=' {
         // `/=`: absorb the `=`.
         *kind.add(s) = tk!(SlashEq);
@@ -144,9 +149,10 @@ unsafe fn lex_regex(
     word: *const u64,
     s: usize,
     lanes: &mut Lanes,
+    cpu: impl Cpu,
 ) -> usize {
     let mut nl_at = usize::MAX;
-    let e = scan_regex(src, n, s + 1, &mut nl_at);
+    let e = scan_regex(src, n, s + 1, &mut nl_at, cpu);
     let fs = if e < n { e + 1 } else { n };
     if nl_at != usize::MAX {
         // oxc_parser reports a line terminator in the body as "unterminated"
@@ -164,7 +170,7 @@ unsafe fn lex_regex(
     if end > s + 1 {
         bm_clear_range(st, s + 1, end - 1);
     }
-    lanes.push_regex_flags(srcs, fs, end);
+    lanes.push_regex_flags(srcs, fs, end, cpu);
     end
 }
 
@@ -187,8 +193,14 @@ pub(super) unsafe fn skip_unicode_brace_escape(src: *const u8, n: usize, s: usiz
 /// (U+2028/U+2029). Stops at LS/PS too, so the hashbang scan cannot run
 /// through one. A 0xE2 that isn't LS/PS keeps scanning; the 2-byte confirm
 /// past a trailing 0xE2 reads the pad, which can never match 0x80.
+#[apply(cpu_versions)]
 #[inline]
-pub(super) unsafe fn find_line_terminator(src: *const u8, n: usize, mut i: usize) -> usize {
+pub(super) unsafe fn find_line_terminator(
+    src: *const u8,
+    n: usize,
+    mut i: usize,
+    _cpu: impl Cpu,
+) -> usize {
     loop {
         let p = find(src, n, i, [b'\n', b'\r', 0xE2]);
         if p >= n {
