@@ -1358,12 +1358,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 
 [[package]]
-name = "macro_rules_attr"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "df6b51dd2c42ad49398acaa235ff7f5d82f11a0ad1e25e8aeaee0a47b9df7e8a"
-
-[[package]]
 name = "markdown"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1705,9 +1699,9 @@ dependencies = [
 
 [[package]]
 name = "oxc-htmlish-parser"
-version = "0.0.1"
+version = "0.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "909fd32d29f076e5129a27244801bed7de5ce33a974310c710f8777dee016495"
+checksum = "d56b242831e1d43ca8b931fec32a68a263a7b1c1c7e7f74cfb7f94c4759f3ae9"
 dependencies = [
  "memchr",
  "oxc_allocator",
@@ -1855,7 +1849,6 @@ dependencies = [
  "oxc_estree_tokens",
  "oxc_formatter",
  "oxc_isolated_declarations",
- "oxc_lexer",
  "oxc_linter",
  "oxc_mangler",
  "oxc_minifier",
@@ -2124,6 +2117,7 @@ version = "0.75.0"
 dependencies = [
  "cow-utils",
  "insta",
+ "memchr",
  "oxc-graphql-parser",
  "oxc_allocator",
  "oxc_diagnostics",
@@ -2280,15 +2274,23 @@ name = "oxc_lexer"
 version = "0.139.0"
 dependencies = [
  "constcat",
- "macro_rules_attr",
  "memchr",
  "oxc_ast",
  "oxc_data_structures",
  "oxc_diagnostics",
+ "oxc_lexer_macros",
  "oxc_span",
  "oxc_syntax",
- "pastey",
  "rustc-hash",
+]
+
+[[package]]
+name = "oxc_lexer_macros"
+version = "0.0.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.5",
 ]
 
 [[package]]
@@ -3008,12 +3010,6 @@ dependencies = [
  "smallvec",
  "windows-link",
 ]
-
-[[package]]
-name = "pastey"
-version = "0.2.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2ee67f1008b1ba2321834326597b8e186293b049a023cdef258527550b9935b4"
 
 [[package]]
 name = "pem-rfc7468"

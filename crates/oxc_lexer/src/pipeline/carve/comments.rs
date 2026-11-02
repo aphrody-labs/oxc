@@ -1,10 +1,13 @@
 use oxc_ast::{Comment, CommentContent, CommentKind};
 
-use crate::{error::DiagCode, token::tk};
+use crate::{
+    cpu::{BASELINE, Cpu, cpu_multiversion, cpu_version},
+    error::DiagCode,
+    token::tk,
+};
 
 use crate::pipeline::{
     bitmap::{bm_clear_range, bm_set},
-    cpu::{BASELINE, Cpu, apply, cpu_versions},
     lanes::Lanes,
     scan::{scan_block_comment, scan_line_comment},
 };
@@ -12,6 +15,7 @@ use crate::pipeline::{
 use super::common::find_line_terminator;
 
 /// Lex the `//` line comment at `s`. Returns the resume index.
+#[cpu_multiversion]
 #[inline(always)]
 pub(super) unsafe fn lex_line_comment(
     src: *const u8,
@@ -23,13 +27,13 @@ pub(super) unsafe fn lex_line_comment(
     lanes: &mut Lanes,
     cpu: impl Cpu,
 ) -> usize {
-    let (end, lic_q) = scan_line_comment(src, n, s + 2);
+    let (end, lic_q) = scan_line_comment(src, n, s + 2, cpu);
     *kind.add(s) = tk!(LineComment);
     if end > s + 1 {
-        bm_clear_range(st, s + 1, end - 1);
+        bm_clear_range(st, s + 1, end - 1, cpu);
     }
     if end < n {
-        bm_set(st, end);
+        bm_set(st, end, cpu);
     }
     let lic = lic_q >= 0 && (lic_q as usize) + 8 < end;
     let body = comment_body(&srcs[..n], s as u32, end as u32, false, cpu);
@@ -41,6 +45,7 @@ pub(super) unsafe fn lex_line_comment(
 
 /// Lex the `/*` block comment at `s` (unterminated at EOF is diagnosed).
 /// Returns the resume index.
+#[cpu_multiversion]
 #[inline(always)]
 pub(super) unsafe fn lex_block_comment(
     src: *const u8,
@@ -52,14 +57,14 @@ pub(super) unsafe fn lex_block_comment(
     lanes: &mut Lanes,
     cpu: impl Cpu,
 ) -> usize {
-    let (e, mut saw_nl, lic_q) = scan_block_comment(src, n, s + 2);
+    let (e, mut saw_nl, lic_q) = scan_block_comment(src, n, s + 2, cpu);
     let end = if e < n { e + 1 } else { n };
     if e >= n {
         lanes.push_diag(s as u32, (n - s) as u32, DiagCode::UnterminatedBlockComment);
     }
     *kind.add(s) = tk!(BlockComment);
     if end > s + 1 {
-        bm_clear_range(st, s + 1, end - 1);
+        bm_clear_range(st, s + 1, end - 1, cpu);
     }
 
     let body = comment_body(&srcs[..n], s as u32, end as u32, true, cpu);
@@ -104,6 +109,7 @@ pub(super) unsafe fn lex_block_comment(
 /// Annex B B.1.1: does the `<` at `s` open a `<!--` comment? Always in a script; in a module
 /// only at line start, where it is diagnosed rather than read as operators. Shared by `carve`
 /// and `carve_jsx` JS mode: the goal, not the JSX setting, decides.
+#[cpu_multiversion]
 #[inline(always)]
 pub(super) fn html_open_comment_at(
     srcs: &[u8],
@@ -125,6 +131,7 @@ pub(super) fn html_open_comment_at(
 /// As it's cold code, it's compiled only once, not separately for each CPU feature set,
 /// which keeps the binary smaller. `#[inline(never)]` stops it being inlined into
 /// the separate copies of its callers. It uses [`BASELINE`] for functions it calls.
+#[cpu_version(Generic)]
 #[cold]
 #[inline(never)]
 pub(super) unsafe fn lex_html_open_comment(
@@ -145,14 +152,14 @@ pub(super) unsafe fn lex_html_open_comment(
     let end = find_line_terminator(src, n, s + 4, cpu);
     *kind.add(s) = tk!(LineComment);
     if end > s + 1 {
-        bm_clear_range(st, s + 1, end - 1);
+        bm_clear_range(st, s + 1, end - 1, cpu);
     }
     if end < n {
-        bm_set(st, end);
+        bm_set(st, end, cpu);
     }
     // `<`, `!`, `-` are opchars: clear the span from `opch` or `coalesce`
     // would re-tokenize `<!--` as operators.
-    bm_clear_range(opch, s, end - 1);
+    bm_clear_range(opch, s, end - 1, cpu);
     // `comment_body` skips a 2-byte delimiter; pass s + 2 so the 4-byte
     // `<!--` is skipped. The record keeps (s, end).
     let body = comment_body(&srcs[..n], (s + 2) as u32, end as u32, false, cpu);
@@ -163,6 +170,7 @@ pub(super) unsafe fn lex_html_open_comment(
 
 /// Annex B B.1.3: does the `>` at `s` end a `-->` that opens a comment? Only in a script, and
 /// only at line start.
+#[cpu_multiversion]
 #[inline(always)]
 pub(super) fn html_close_comment_at(srcs: &[u8], s: usize, module: bool, cpu: impl Cpu) -> bool {
     !module
@@ -178,6 +186,7 @@ pub(super) fn html_close_comment_at(srcs: &[u8], s: usize, module: bool, cpu: im
 /// As it's cold code, it's compiled only once, not separately for each CPU feature set,
 /// which keeps the binary smaller. `#[inline(never)]` stops it being inlined into
 /// the separate copies of its callers. It uses [`BASELINE`] for functions it calls.
+#[cpu_version(Generic)]
 #[cold]
 #[inline(never)]
 pub(super) unsafe fn lex_html_close_comment(
@@ -195,15 +204,15 @@ pub(super) unsafe fn lex_html_close_comment(
     let start = s - 2;
     let end = find_line_terminator(src, n, s + 1, cpu);
     *kind.add(start) = tk!(LineComment);
-    bm_set(st, start);
+    bm_set(st, start, cpu);
     if end > start + 1 {
-        bm_clear_range(st, start + 1, end - 1);
+        bm_clear_range(st, start + 1, end - 1, cpu);
     }
     if end < n {
-        bm_set(st, end);
+        bm_set(st, end, cpu);
     }
     // Clear the span from `opch` (see `<!--` above).
-    bm_clear_range(opch, start, end - 1);
+    bm_clear_range(opch, start, end - 1, cpu);
     // `-->` is a 3-byte delimiter; pass start + 1 so the 2-byte-delimiter
     // body resolves to [s + 1, end).
     let body = comment_body(&srcs[..n], (start + 1) as u32, end as u32, false, cpu);
@@ -226,7 +235,7 @@ pub(super) unsafe fn lex_html_close_comment(
 /// back must reach a LineTerminator (or start of input) crossing nothing but
 /// whitespace and block comments; a newline inside a crossed block comment
 /// also qualifies. Cold: called only on a literal `-->`.
-#[apply(cpu_versions)]
+#[cpu_multiversion]
 fn html_close_at_line_start(src: &[u8], mut q: usize, _cpu: impl Cpu) -> bool {
     loop {
         if q == 0 {
@@ -269,14 +278,14 @@ fn html_close_at_line_start(src: &[u8], mut q: usize, _cpu: impl Cpu) -> bool {
     }
 }
 
-#[apply(cpu_versions)]
+#[cpu_multiversion]
 #[inline]
 fn classify_exact(body: &[u8], is_block: bool, cpu: impl Cpu) -> CommentContent {
     let lic = contains_license_or_preserve(body, cpu);
     classify(body, is_block, lic, cpu)
 }
 
-#[apply(cpu_versions)]
+#[cpu_multiversion]
 #[inline]
 fn comment_body(src: &[u8], start: u32, end: u32, is_block: bool, _cpu: impl Cpu) -> &[u8] {
     let (lo, hi) = if is_block {
@@ -289,7 +298,7 @@ fn comment_body(src: &[u8], start: u32, end: u32, is_block: bool, _cpu: impl Cpu
     &src[lo..hi]
 }
 
-#[apply(cpu_versions)]
+#[cpu_multiversion]
 fn contains_license_or_preserve(hay: &[u8], _cpu: impl Cpu) -> bool {
     if hay.len() < 9 {
         return false;
@@ -310,7 +319,7 @@ fn contains_license_or_preserve(hay: &[u8], _cpu: impl Cpu) -> bool {
     false
 }
 
-#[apply(cpu_versions)]
+#[cpu_multiversion]
 #[inline]
 fn classify(bytes: &[u8], is_block: bool, lic: bool, cpu: impl Cpu) -> CommentContent {
     if bytes.is_empty() {
@@ -395,15 +404,15 @@ fn classify(bytes: &[u8], is_block: bool, lic: bool, cpu: impl Cpu) -> CommentCo
     if lic { CommentContent::Legal } else { CommentContent::None }
 }
 
-#[apply(cpu_versions)]
+#[cpu_multiversion]
 fn is_property_key_annotation(bytes: &[u8], _cpu: impl Cpu) -> bool {
     std::str::from_utf8(bytes)
         .is_ok_and(|source| matches!(source.trim().strip_prefix(['@', '#']), Some("__KEY__")))
 }
 
-#[apply(cpu_versions)]
+#[cpu_multiversion]
 fn is_coverage_ignore_file(source: &[u8], cpu: impl Cpu) -> bool {
-    #[apply(cpu_versions)]
+    #[cpu_multiversion]
     fn starts_with_directive(source: &[u8], directive: &[u8], _cpu: impl Cpu) -> bool {
         source
             .strip_prefix(directive)
@@ -414,12 +423,12 @@ fn is_coverage_ignore_file(source: &[u8], cpu: impl Cpu) -> bool {
         || starts_with_directive(source, b"istanbul ignore file", cpu)
 }
 
-#[apply(cpu_versions)]
+#[cpu_multiversion]
 fn has_nl_cr(bytes: &[u8], _cpu: impl Cpu) -> bool {
     bytes.iter().any(|&b| b == b'\n' || b == b'\r')
 }
 
-#[apply(cpu_versions)]
+#[cpu_multiversion]
 #[inline]
 fn push_comment_record(
     src: &[u8],
@@ -455,7 +464,7 @@ fn push_comment_record(
     lanes.comments.push(c);
 }
 
-#[apply(cpu_versions)]
+#[cpu_multiversion]
 #[inline]
 fn is_lex_ws(c: u8, _cpu: impl Cpu) -> bool {
     matches!(c, b' ' | b'\t' | b'\n' | b'\r' | 0x0b | 0x0c)
@@ -465,7 +474,7 @@ fn is_lex_ws(c: u8, _cpu: impl Cpu) -> bool {
 mod tests {
     use oxc_ast::ast::CommentContent;
 
-    use crate::pipeline::cpu::BASELINE;
+    use crate::cpu::BASELINE;
 
     use super::classify;
 

@@ -22,7 +22,7 @@
 //! buffers, and keeps what it learns across the lex in a [`DisambiguateState`] the lexer owns.
 //! [`common`] holds the parts both questions need.
 
-use crate::pipeline::cpu::{Cpu, apply, cpu_versions};
+use crate::cpu::{Cpu, cpu_multiversion, cpu_version};
 
 mod common;
 mod context;
@@ -69,6 +69,7 @@ pub(super) struct DisambiguateState {
 }
 
 impl Default for DisambiguateState {
+    #[cpu_version(Generic)]
     fn default() -> Self {
         Self { walks: Walks::new(), brackets: Brackets::default(), closers: Closers::default() }
     }
@@ -76,18 +77,18 @@ impl Default for DisambiguateState {
 
 impl DisambiguateState {
     /// A new lex over `n` bytes of a script or module.
-    #[apply(cpu_versions)]
-    pub fn begin(&mut self, n: usize, module: bool, _cpu: impl Cpu) {
-        self.walks.restart(module);
-        self.brackets.begin(n);
-        self.closers.clear();
+    #[cpu_multiversion]
+    pub fn begin(&mut self, n: usize, module: bool, cpu: impl Cpu) {
+        self.walks.restart(module, cpu);
+        self.brackets.begin(n, cpu);
+        self.closers.clear(cpu);
     }
 
     /// `coalesce` starts asking: it sees keyword kinds `carve` did not, so the walks start over.
-    #[apply(cpu_versions)]
-    pub fn restart(&mut self, module: bool, _cpu: impl Cpu) {
-        self.walks.restart(module);
+    #[cpu_multiversion]
+    pub fn restart(&mut self, module: bool, cpu: impl Cpu) {
+        self.walks.restart(module, cpu);
         // carve has hidden the JSX brackets these were computed over.
-        self.closers.clear();
+        self.closers.clear(cpu);
     }
 }

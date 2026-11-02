@@ -1,17 +1,23 @@
 //! Punctuation inside a type: type regions and how each kind of region ends, angle lists,
 //! and the `<` that may open one.
 
-use crate::token::{OP_KIND_BASE, matches_tk, tk};
+use crate::{
+    cpu::cpu_version,
+    token::{OP_KIND_BASE, matches_tk, tk},
+};
 
 use super::*;
 
 impl Walk {
+    #[cpu_version(Generic)]
     pub(super) fn open_region(&mut self, rule: RegionRule) {
         self.push(FrameKind::TypeRegion).region = rule;
         self.operand_done();
     }
 
     /// End the type region on top because the token after it belongs to the expression.
+    #[cpu_version(Generic)]
+    #[inline(always)]
     pub(super) fn end_region_for(&mut self) {
         if self.top_kind() != FrameKind::TypeRegion {
             return;
@@ -30,10 +36,13 @@ impl Walk {
     }
 
     /// Can the token at pos, of base kind k, continue the type the region on top completed?
+    #[cpu_version(Generic)]
     pub(super) fn continues_type(&self, tokens: &Tokens, pos: usize, k: u8) -> bool {
+        let cpu = BASELINE;
+
         if k == tk!(Ident) {
             // A conditional type or a type predicate.
-            return matches_tk!(tokens.ident_kw(pos), KwExtends | KwIs);
+            return matches_tk!(tokens.ident_kw(pos, cpu), KwExtends | KwIs);
         }
         if k < OP_KIND_BASE {
             return false;
@@ -54,6 +63,7 @@ impl Walk {
         }
     }
 
+    #[cpu_version(Generic)]
     pub(super) fn type_op(&mut self, pos: usize, c: u8, len: usize) -> usize {
         let top = self.top_kind();
         match c {
@@ -133,6 +143,7 @@ impl Walk {
         pos + 1
     }
 
+    #[cpu_version(Generic)]
     pub(super) fn close_angle(&mut self) {
         let a = self.pop();
         match a.angle {
@@ -149,7 +160,10 @@ impl Walk {
         }
     }
 
+    #[cpu_version(Generic)]
     pub(super) fn less_than(&mut self, tokens: &Tokens, pos: usize) {
+        let cpu = BASELINE;
+
         // Declaration type parameters, an assertion or generic arrow, type arguments, or less-than.
         let list = if !tokens.ts {
             None
@@ -157,7 +171,7 @@ impl Walk {
             Some(AngleList::Value)
         } else if self.operand_allowed() {
             Some(AngleList::Assert)
-        } else if !self.no_type_args && type_args_at(tokens, pos) {
+        } else if !self.no_type_args && type_args_at(tokens, pos, cpu) {
             Some(AngleList::Value)
         } else {
             None

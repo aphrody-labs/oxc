@@ -1,15 +1,18 @@
 use oxc_span::Span;
 
-use crate::token::{is_trivia_byte, matches_tk, tk};
+use crate::{
+    cpu::{BASELINE, cpu_version},
+    token::{is_trivia_byte, matches_tk, tk},
+};
 
 use crate::pipeline::{
     chunk::{eqm, load64},
-    cpu::{Cpu, apply, cpu_versions},
     lanes::Lanes,
 };
 
 use super::common::{emit_value, invalid_diags};
 
+#[cpu_version(Generic)]
 pub(super) unsafe fn compress_blocks_generic(
     st: *const u64,
     kind: *const u8,
@@ -37,6 +40,7 @@ pub(super) unsafe fn compress_blocks_generic(
 }
 
 /// Contents of this function is in common with AVX2 implementation.
+#[cpu_version(Generic)]
 pub(super) unsafe fn build_spans_generic(
     stage_kind: *const u8,
     stage_pos: *const u32,
@@ -44,6 +48,8 @@ pub(super) unsafe fn build_spans_generic(
     spans: *mut Span,
     sig_kinds: *mut u8,
 ) -> usize {
+    let cpu = BASELINE;
+
     let sp = spans.cast::<u64>();
     let mut w = 0usize;
     let mut j = 0usize;
@@ -52,14 +58,14 @@ pub(super) unsafe fn build_spans_generic(
         let k = *stage_kind.add(j);
         *sp.add(w) = stage_pos.add(j).cast::<u64>().read_unaligned();
         *sig_kinds.add(w) = k;
-        w += usize::from(!is_trivia_byte(k) || k == tk!(Hashbang));
+        w += usize::from(!is_trivia_byte(k, cpu) || k == tk!(Hashbang));
         j += 1;
     }
 
     w
 }
 
-#[apply(cpu_versions)]
+#[cpu_version(Generic)]
 pub(super) unsafe fn lanes_post_generic(
     src: &[u8],
     out_kinds: *const u8,
@@ -67,8 +73,9 @@ pub(super) unsafe fn lanes_post_generic(
     m: usize,
     nn: u32,
     lanes: &mut Lanes,
-    cpu: impl Cpu,
 ) {
+    let cpu = BASELINE;
+
     let mut inv = 0u64;
     let mut i = 0usize;
     while i + 8 <= m {

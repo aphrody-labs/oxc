@@ -1,16 +1,22 @@
 //! Punctuation in expression context: operators, arrows, separators, and the brackets that
 //! open and close frames.
 
-use crate::token::{OP_KIND_BASE, matches_tk, tk};
+use crate::{
+    cpu::cpu_version,
+    token::{OP_KIND_BASE, matches_tk, tk},
+};
 
 use crate::pipeline::operators::is_op_char;
 
 use super::*;
 
 impl Walk {
+    #[cpu_version(Generic)]
     pub(super) fn step_op(&mut self, tokens: &Tokens, pos: usize, newline: bool) -> usize {
+        let cpu = BASELINE;
+
         let c = tokens.src[pos];
-        let mut len = if is_op_char(c) || c == b'/' { tokens.op_len(pos) } else { 1 };
+        let mut len = if is_op_char(c, cpu) || c == b'/' { tokens.op_len(pos) } else { 1 };
         let c1 = tokens.src[pos + 1];
 
         // Type context: brackets and separators belong to the type.
@@ -50,7 +56,7 @@ impl Walk {
                 self.operand_done();
             }
             // The dot of a number such as 1. continues the literal.
-            b'.' if tokens.numeric_dot(pos) => self.set_value(),
+            b'.' if tokens.numeric_dot(pos, cpu) => self.set_value(),
             b'.' => {
                 self.operand_done();
                 self.after_dot = true;
@@ -82,7 +88,7 @@ impl Walk {
                 && tokens.ts
                 && !self.operand_allowed()
                 && !self.no_type_args
-                && lt_run_split(tokens, pos) =>
+                && lt_run_split(tokens, pos, cpu) =>
             {
                 self.less_than(tokens, pos);
                 return pos + 1;
@@ -104,10 +110,13 @@ impl Walk {
         pos + len
     }
 
+    #[cpu_version(Generic)]
     pub(super) fn arrow(&mut self, tokens: &Tokens, pos: usize) {
+        let cpu = BASELINE;
+
         let is_async = if self.closed_group { self.closed_group_async } else { self.arrow_async };
         // Concise body unless `{` follows.
-        let nx = tokens.peek(pos + 2);
+        let nx = tokens.peek(pos + 2, cpu);
         let block = nx.kind >= OP_KIND_BASE && nx.byte == b'{';
         if !block {
             self.push(FrameKind::Concise).is_async = is_async;
@@ -117,6 +126,7 @@ impl Walk {
         self.arrow_async = is_async;
     }
 
+    #[cpu_version(Generic)]
     pub(super) fn assign(&mut self) {
         if matches!(self.stmt_reg(), StmtReg::TypeName | StmtReg::Import) {
             // `type X =`: the alias type.
@@ -133,9 +143,12 @@ impl Walk {
         self.operand_done();
     }
 
+    #[cpu_version(Generic)]
     pub(super) fn question(&mut self, tokens: &Tokens, pos: usize) {
+        let cpu = BASELINE;
+
         // Optional marker (`a?: T`, `a?,`, `a?)`) vs conditional.
-        let nx = tokens.peek(pos + 1);
+        let nx = tokens.peek(pos + 1, cpu);
         let member = self.top_kind() == FrameKind::ClassBody;
         let optional = nx.kind >= OP_KIND_BASE
             && (matches!(nx.byte, b':' | b',' | b')' | b']' | b'>')
@@ -149,6 +162,7 @@ impl Walk {
         self.operand_done();
     }
 
+    #[cpu_version(Generic)]
     fn colon(&mut self, tokens: &Tokens) {
         // A concise arrow body without a pending `?` of its own ends at a `:` (the `?` belongs to
         // the frame below).
@@ -219,6 +233,7 @@ impl Walk {
         self.operand_done();
     }
 
+    #[cpu_version(Generic)]
     pub(super) fn semicolon(&mut self) {
         self.pop_concise();
         match self.top_kind() {
@@ -237,6 +252,7 @@ impl Walk {
         }
     }
 
+    #[cpu_version(Generic)]
     pub(super) fn comma(&mut self) {
         self.pop_concise();
         let top = self.top_kind();
@@ -256,6 +272,7 @@ impl Walk {
         self.operand_done();
     }
 
+    #[cpu_version(Generic)]
     pub(super) fn open_brace(&mut self) {
         let top = *self.top();
         let mut body = Frame::default();
@@ -309,6 +326,7 @@ impl Walk {
         self.decorator = 0;
     }
 
+    #[cpu_version(Generic)]
     pub(super) fn close_brace(&mut self) {
         // Virtual frames above the brace end with it.
         let Some(f) = self.pop_to(|k| k.closer() == b'}') else {
@@ -348,6 +366,7 @@ impl Walk {
         }
     }
 
+    #[cpu_version(Generic)]
     pub(super) fn open_paren(&mut self) {
         let (top, kw) = (*self.top(), self.prev_kw);
         if matches!(top.kind, FrameKind::Object | FrameKind::ClassBody)
@@ -376,6 +395,7 @@ impl Walk {
         self.operand_done();
     }
 
+    #[cpu_version(Generic)]
     pub(super) fn close_paren(&mut self) {
         let Some(f) = self.pop_to(|k| k.closer() == b')') else {
             self.unbalanced_close();
@@ -396,6 +416,7 @@ impl Walk {
         }
     }
 
+    #[cpu_version(Generic)]
     pub(super) fn open_bracket(&mut self) {
         let top = self.top_kind();
         let kind = if matches!(top, FrameKind::Object | FrameKind::ClassBody)
@@ -409,6 +430,7 @@ impl Walk {
         self.operand_done();
     }
 
+    #[cpu_version(Generic)]
     pub(super) fn close_bracket(&mut self) {
         let Some(f) = self.pop_to(|k| k.closer() == b']') else {
             self.unbalanced_close();
